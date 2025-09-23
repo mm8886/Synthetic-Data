@@ -1,0 +1,275 @@
+import pandas as pd
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, FunctionTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.base import BaseEstimator, TransformerMixin
+import joblib
+import warnings
+warnings.filterwarnings('ignore')
+
+# Custom transformers for specific data processing tasks
+class DateFeatureExtractor(BaseEstimator, TransformerMixin):
+    """Extract features from date columns"""
+    def __init__(self, date_columns):
+        self.date_columns = date_columns
+        
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        for col in self.date_columns:
+            if col in X.columns:
+                X[col] = pd.to_datetime(X[col], errors='coerce')
+                X[f'{col}_month'] = X[col].dt.month
+                X[f'{col}_dayofweek'] = X[col].dt.dayofweek
+                X[f'{col}_year'] = X[col].dt.year
+                # Drop original date column
+                X = X.drop(columns=[col])
+        return X
+
+class IncomeBandEncoder(BaseEstimator, TransformerMixin):
+    """Encode income bands to numerical values"""
+    def __init__(self):
+        self.income_mapping = {
+            '50,000 or Below': 0,
+            '50,000 to 100,000': 1,
+            '100,000 to 200,000': 2,
+            '200,000 to 300,000': 3,
+            '300,000 to 500,000': 4,
+            '500,000 or Above': 5
+        }
+        
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        if 'Income_Band_SGD' in X.columns:
+            X['Income_Band_SGD'] = X['Income_Band_SGD'].map(self.income_mapping)
+        return X
+
+class BooleanConverter(BaseEstimator, TransformerMixin):
+    """Convert various boolean representations to proper booleans"""
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        bool_columns = ['Partial_Payment_Indicator', 'Repayment_Irregularity_Flags', 
+                       'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data']
+        
+        for col in bool_columns:
+            if col in X.columns:
+                X[col] = X[col].astype(str).str.lower().replace({
+                    'true': True, 'false': False, '1': True, '0': False, 
+                    'yes': True, 'no': False
+                }).astype(bool)
+        return X
+
+class DigitalEngagementCalculator(BaseEstimator, TransformerMixin):
+    """Calculate digital engagement score"""
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X):
+        X = X.copy()
+        engagement_metrics = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
+        if all(metric in X.columns for metric in engagement_metrics):
+            X['Digital_Engagement_Score'] = (
+                X['App_Login_Frequency'] + 
+                X['UPI_Transactions'] + 
+                X['Online_Banking_Activity']
+            ) / 3
+        return X
+
+class DataLoader(BaseEstimator, TransformerMixin):
+    """Load and initial data processing"""
+    def __init__(self, file_path, chunk_size=10000):
+        self.file_path = file_path
+        self.chunk_size = chunk_size
+        
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X=None):
+        """Load data from CSV file"""
+        print("Loading data...")
+        
+        # Load data in chunks for memory efficiency
+        chunks = []
+        for i, chunk in enumerate(pd.read_csv(self.file_path, chunksize=self.chunk_size)):
+            chunks.append(chunk)
+            if (i + 1) % 10 == 0:  # Print progress every 10 chunks
+                print(f"Loaded {min((i+1)*self.chunk_size, self._get_total_rows()):,} rows")
+        
+        df = pd.concat(chunks, ignore_index=True)
+        print(f"Successfully loaded {len(df):,} rows")
+        return df
+    
+    def _get_total_rows(self):
+        """Get total number of rows in the file"""
+        return sum(1 for line in open(self.file_path)) - 1  # Subtract header
+
+class SklearnDataPipeline:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.pipeline = None
+        self.processed_data = None
+        self._build_pipeline()
+    
+    def _get_numeric_columns(self):
+        """Define numeric columns for preprocessing"""
+        return ['Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due', 
+                'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
+                'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
+                'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
+                'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
+                'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
+                'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
+                'Income_Band_SGD', 'Digital_Engagement_Score']
+    
+    def _get_categorical_columns(self):
+        """Define categorical columns for preprocessing"""
+        return ['Product_Type', 'Payment_Frequency', 'Settlement_History', 
+                'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag', 
+                'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
+                'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
+                'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
+                'Gender', 'Occupation', 'Employeement_Type']
+    
+    def _get_date_columns(self):
+        """Define date columns for processing"""
+        return ['Installment_Due_Date', 'Last_Payment_Date']
+    
+    def _build_pipeline(self):
+        """Build the scikit-learn pipeline"""
+        
+        # Define column transformers for different data types
+        numeric_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+        
+        categorical_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+        ])
+        
+        # Main preprocessing pipeline
+        self.pipeline = Pipeline([
+            # Step 1: Load data
+            ('data_loader', DataLoader(self.file_path)),
+            
+            # Step 2: Convert boolean columns
+            ('boolean_converter', BooleanConverter()),
+            
+            # Step 3: Encode income bands
+            ('income_encoder', IncomeBandEncoder()),
+            
+            # Step 4: Extract date features
+            ('date_extractor', DateFeatureExtractor(self._get_date_columns())),
+            
+            # Step 5: Calculate digital engagement
+            ('engagement_calculator', DigitalEngagementCalculator()),
+            
+            # Step 6: Column-based preprocessing
+            ('column_processor', ColumnTransformer(
+                transformers=[
+                    ('num', numeric_transformer, self._get_numeric_columns()),
+                    ('cat', categorical_transformer, self._get_categorical_columns())
+                ],
+                remainder='passthrough'  # Keep other columns unchanged
+            )),
+            
+            # Step 7: Remove duplicates
+            ('duplicate_remover', FunctionTransformer(
+                lambda X: pd.DataFrame(X).drop_duplicates().values, 
+                validate=False
+            ))
+        ])
+    
+    def fit_transform(self, save_path=None):
+        """Run the complete pipeline and return processed data"""
+        print("=" * 50)
+        print("RUNNING SKLEARN DATA PIPELINE")
+        print("=" * 50)
+        
+        # Fit and transform the data
+        processed_array = self.pipeline.fit_transform(None)
+        
+        # Convert back to DataFrame and get column names
+        processed_df = self._reconstruct_dataframe(processed_array)
+        
+        self.processed_data = processed_df
+        
+        # Save if path provided
+        if save_path:
+            self.save_processed_data(save_path)
+        
+        print("Pipeline completed successfully!")
+        return processed_df
+    
+    def _reconstruct_dataframe(self, array):
+        """Reconstruct DataFrame with proper column names after pipeline processing"""
+        
+        # Get feature names from the column transformer
+        column_transformer = self.pipeline.named_steps['column_processor']
+        
+        # Get numeric feature names
+        numeric_features = self._get_numeric_columns()
+        
+        # Get categorical feature names (after one-hot encoding)
+        categorical_encoder = column_transformer.named_transformers_['cat'].named_steps['onehot']
+        categorical_features = list(categorical_encoder.get_feature_names_out(self._get_categorical_columns()))
+        
+        # Combine all feature names
+        all_features = numeric_features + categorical_features
+        
+        # Create DataFrame
+        df = pd.DataFrame(array, columns=all_features)
+        
+        return df
+    
+    def save_processed_data(self, path):
+        """Save the processed data"""
+        if self.processed_data is not None:
+            self.processed_data.to_csv(path, index=False)
+            print(f"Processed data saved to {path}")
+            
+            # Also save the pipeline for future use
+            joblib.dump(self.pipeline, 'sklearn_data_pipeline.pkl')
+            print("Pipeline saved as 'sklearn_data_pipeline.pkl'")
+    
+    def load_and_transform_new_data(self, new_data_path):
+        """Load and transform new data using the fitted pipeline"""
+        if self.pipeline is None:
+            raise ValueError("Pipeline not fitted yet. Call fit_transform first.")
+        
+        # Use the fitted pipeline to transform new data
+        new_data_array = self.pipeline.transform(None)
+        new_data_df = self._reconstruct_dataframe(new_data_array)
+        
+        return new_data_df
+
+# Example usage
+if __name__ == "__main__":
+    # Initialize the sklearn pipeline
+    sklearn_pipeline = SklearnDataPipeline('singapore_loan_data (7).csv')
+    
+    # Run the complete pipeline
+    processed_data = sklearn_pipeline.fit_transform(save_path='sklearn_processed_data.csv')
+    
+    # Display results
+    print("\nPipeline Summary:")
+    print(f"Original data shape: {sklearn_pipeline.pipeline.named_steps['data_loader'].transform(None).shape}")
+    print(f"Processed data shape: {processed_data.shape}")
+    print(f"Processed data columns: {len(processed_data.columns)}")
+    
+    print("\nSample of processed data:")
+    print(processed_data.head())
+    
+    print("\nData types after processing:")
+    print(processed_data.dtypes.value_counts())
