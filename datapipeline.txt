@@ -1,0 +1,75 @@
+Here is a tailored data cleaning documentation for your **Singapore Loan Dataset** pipeline. It explains why certain cleaning steps are included or excluded, considering the synthetic nature of the data and the specific dataset features described:
+
+***
+
+### Data Cleaning Documentation for Singapore Loan Dataset Pipeline
+
+#### Data Cleaning Techniques Used (6)
+
+- **1. Boolean Standardization**  
+  The dataset contains several boolean-like columns (e.g., *Partial_Payment_Indicator*, *Mobile_Number_Active_Status*). These fields have varied representations like `"True"`, `"False"`, `"1"`, `"0"`, `"yes"`, `"no"`. The pipeline converts these into consistent boolean types (`True`/`False`).  
+  *Reason:* Enables uniform processing and correct modeling behavior on these logical flags.
+
+- **2. Categorical Encoding with One-Hot Encoding**  
+  Categorical features such as *Product_Type*, *Gender*, *Occupation*, *Payment_Frequency* are converted to one-hot encoded vectors.  
+  *Reason:* Converts nominal categorical data to numeric format required for machine learning algorithms without implying ordinal relationships.
+
+- **3. Missing Value Imputation**  
+  Numeric columns undergo median imputation, while categorical columns use the mode (most frequent value) imputation.  
+  *Reason:* Even though synthetic data is generally clean, missingness can be introduced intentionally to mimic real data and test model robustness. Imputation maintains dataset integrity and prevents errors.
+
+- **4. Date Feature Extraction**  
+  Dates (*Installment_Due_Date*, *Last_Payment_Date*) are converted into meaningful numerical features: year, month, and day of week.  
+  *Reason:* The original date as a string or timestamp is not directly useful to models. Extracting granular temporal features captures important patterns related to loan payments and delays.
+
+- **5. Ordinal Encoding of Income Bands**  
+  The *Income_Band_SGD* feature with ranges (e.g., `"50,000 to 100,000"`) is mapped to ordered integers from 0 to 5.  
+  *Reason:* This respects the natural order of income brackets, allowing the model to interpret relative financial statuses properly without enlarging feature space unnecessarily.
+
+- **6. Feature Engineering: Digital Engagement Score**  
+  A combined metric from *App_Login_Frequency*, *UPI_Transactions*, and *Online_Banking_Activity* averages these to create a single *Digital_Engagement_Score*.  
+  *Reason:* Synthesizes multiple correlated digital activity indicators into a compact measure, improving signal extraction regarding customer engagement and repayment likelihood.
+
+***
+
+#### Data Cleaning Techniques Not Used (4)
+
+- **1. Outlier Detection and Treatment**  
+  *Why excluded:* Synthetic data typically has controlled value ranges, so extreme outliers are unlikely. In original datasets, loan amounts, credit scores, or payment delays could have anomalous values needing treatment to prevent skewed models.
+
+- **2. Text Data Cleaning and Normalization**  
+  Features like *Name* and *Address* exist but are not processed for text normalization or cleaning.  
+  *Why excluded:* The synthetic dataset contains clean text without typographical errors or noise. Real datasets would require cleaning for consistent parsing and text analysis (e.g., removing special characters, correcting typos).
+
+- **3. Complex Deduplication / Entity Resolution**  
+  The pipeline removes duplicates only by exact row replication, not by fuzzy matching or merging records of the same customer with slightly different details.  
+  *Why excluded:* Synthetic data does not include duplicate or near-duplicate customer entries. Real loan data often has multiple records for the same individual across systems, requiring sophisticated deduplication.
+
+- **4. Data Type Validation and Anomaly Checks**  
+  Validation of fields like phone numbers, email formats, enforced value ranges, or geographical correctness are not performed.  
+  *Why excluded:* Synthetic datasets are generated with correct, valid data types and formats. Original data often requires validation against business rules to detect errors, corruption, or malicious inputs.
+
+***
+
+### Summary
+
+| Cleaning Type                     | Used | Reason for Inclusion/Exclusion                              |
+|----------------------------------|------|------------------------------------------------------------|
+| Boolean Standardization           | Yes  | Ensures consistent logical features for modeling           |
+| Categorical Encoding (One-Hot)   | Yes  | Converts nominal categorical features for ML consumption   |
+| Missing Value Imputation          | Yes  | Handles potential missingness even in synthetic data       |
+| Date Feature Extraction           | Yes  | Extracts useful temporal components from date columns      |
+| Ordinal Encoding (Income Bands)  | Yes  | Preserves ordered relationships of income categories       |
+| Digital Engagement Feature Engineer| Yes | Combines engagement metrics into a meaningful numeric score |
+| Outlier Detection/Treatment      | No   | Synthetic data controlled, outliers unlikely                |
+| Text Cleaning/Normalization       | No   | No noisy/unclean text in synthetic data                     |
+| Complex Deduplication             | No   | Synthetic data lacks near-duplicate or overlapping entries  |
+| Data Type/Format Validation      | No   | Synthetic data is cleanly generated and validated           |
+
+***
+
+This documentation aligns explicitly with the Singapore Loan Dataset features and explains why certain cleaning steps are necessary or unnecessary for synthetic data versus original datasets. It highlights the pipeline’s emphasis on feature consistency, encoding, and basic imputations while skipping validation and error correction common to real-world, raw data.
+
+If needed, this can further be expanded into detailed methodology or integrated into project reports.
+
+Sources
