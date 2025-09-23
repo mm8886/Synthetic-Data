@@ -1,0 +1,432 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import random
+
+# Configuration
+num_records = 100000  # Number of records to generate
+
+# Singapore-specific data
+singapore_districts = {
+    "01": ["Raffles Place", "Marina", "People's Park"],
+    "02": ["Anson", "Tanjong Pagar"],
+    "03": ["Queenstown", "Tiong Bahru"],
+    "04": ["Telok Blangah", "HarbourFront"],
+    "05": ["Pasir Panjang", "Hong Leong Garden", "Clementi New Town"],
+    "06": ["High Street", "Beach Road"],
+    "07": ["Middle Road", "Golden Mile"],
+    "08": ["Little India", "Farrer Park"],
+    "09": ["Orchard", "Cairnhill", "River Valley"],
+    "10": ["Ardmore", "Bukit Timah", "Holland Road"],
+    "11": ["Watten Estate", "Novena", "Thomson"],
+    "12": ["Balestier", "Toa Payoh", "Serangoon"],
+    "13": ["Macpherson", "Braddell"],
+    "14": ["Geylang", "Eunos"],
+    "15": ["Katong", "Joo Chiat", "Amber Road"],
+    "16": ["Bedok", "Upper East Coast", "Eastwood", "Kew Drive"],
+    "17": ["Loyang", "Changi"],
+    "18": ["Tampines", "Pasir Ris"],
+    "19": ["Serangoon Garden", "Hougang", "Punggol"],
+    "20": ["Bishan", "Ang Mo Kio"],
+    "21": ["Upper Bukit Timah", "Clementi Park", "Ulu Pandan"],
+    "22": ["Jurong"],
+    "23": ["Hillview", "Dairy Farm", "Bukit Panjang", "Choa Chu Kang"],
+    "24": ["Lim Chu Kang", "Tengah"],
+    "25": ["Kranji", "Woodgrove"],
+    "26": ["Upper Thomson", "Springleaf"],
+    "27": ["Yishun", "Sembawang"],
+    "28": ["Seletar"]
+}
+
+street_names = [
+    "Orchard Road", "North Bridge Road", "South Bridge Road", "Victoria Street",
+    "Beach Road", "Serangoon Road", "Havelock Road", "Outram Road",
+    "Cecil Street", "Robinson Road", "Maxwell Road", "Telok Ayer Street",
+    "Bras Basah Road", "Bugis Street", "Chinatown Street", "Clarke Quay",
+    "Collyer Quay", "East Coast Road", "Emerald Hill Road", "Farrer Road",
+    "Geylang Road", "Holland Road", "Jalan Besar", "Joo Chiat Road",
+    "Jurong East Street", "Kallang Road", "Lavender Street", "MacPherson Road",
+    "Marine Parade Road", "Newton Road", "Pasir Panjang Road", "Potong Pasir Avenue",
+    "Scotts Road", "Sembawang Road", "Simei Street", "Tampines Avenue",
+    "Tanglin Road", "Toa Payoh Central", "Upper Serangoon Road", "Woodlands Avenue"
+]
+
+# Singaporean names (expanded)
+
+chinese_first_names = [
+    "Wei", "Jie", "Ming", "Li", "Xin", "Hui", "Yan", "Feng", "Jun", "Ling",
+    "Chen", "Qian", "Tao", "Shan", "Xiao", "Ying", "Kai", "Zhi", "Rui", "Bo",
+    "Guo", "Han", "Lei", "Pei", "Qing", "Shu", "Ting", "Xiang", "Yuan", "Zhen",
+    "Hao", "Dong", "Cheng", "An", "Yun", "Lan", "Ke", "Ping", "Yao", "Lu"
+]
+chinese_last_names = [
+    "Tan", "Lim", "Lee", "Ng", "Ong", "Wong", "Chua", "Chan", "Koh", "Teo",
+    "Goh", "Loh", "Toh", "Chew", "Seah", "Phua", "Yeo", "Low", "Quek", "Pang",
+    "Sim", "Ho", "Peh", "Ang", "Cheong", "Soon", "Neo", "Mak", "Cheng", "Foo"
+]
+
+malay_first_names = [
+    "Ahmad", "Mohamed", "Siti", "Abdullah", "Fatimah", "Ali", "Rahman", "Zainal", "Nor", "Hassan",
+    "Azman", "Roslan", "Fauziah", "Sharifah", "Yusof", "Nordin", "Halijah", "Ismail", "Khalid", "Rahimah",
+    "Aminah", "Mustafa", "Latifah", "Rashid", "Saiful", "Najib", "Faridah", "Salim", "Halim", "Karim",
+    "Jamilah", "Mazlan", "Nurul", "Zaharah", "Fadzil", "Hanisah", "Rahmat", "Syed", "Shahrul", "Ridwan"
+]
+malay_last_names = [
+    "bin Ahmad", "binti Mohamed", "bin Ismail", "binti Abdullah", "bin Ali", "binti Hassan",
+    "bin Omar", "binti Yusof", "bin Ibrahim", "binti Rahman", "bin Salleh", "binti Iskandar",
+    "bin Osman", "binti Hamid", "bin Daud", "binti Idris", "bin Mustapha", "binti Latif",
+    "bin Ramli", "binti Shahrin", "bin Zulkifli", "binti Jalil", "bin Khalid", "binti Karim"
+]
+
+indian_first_names = [
+    "Raj", "Kumar", "Suresh", "Priya", "Latha", "Arjun", "Divya", "Vijay", "Anand", "Deepa",
+    "Ravi", "Lakshmi", "Manoj", "Aishwarya", "Santosh", "Meena", "Harish", "Shalini", "Naveen", "Geetha",
+    "Karthik", "Sanjay", "Pooja", "Sunita", "Balaji", "Anjali", "Mohan", "Indira", "Gopalakrishnan", "Swapna",
+    "Ramesh", "Chitra", "Ajay", "Hemant", "Sangeetha", "Vinod", "Parvati", "Ashok", "Radha", "Usha"
+]
+indian_last_names = [
+    "Kumar", "Devi", "Singh", "Rao", "Patel", "Menon", "Pillai", "Sharma", "Subramaniam", "Gopal",
+    "Iyer", "Nair", "Das", "Varma", "Chandran", "Naidu", "Prasad", "Chatterjee", "Bose", "Reddy",
+    "Shankar", "Krishnan", "Gupta", "Verma", "Kapoor", "Malhotra", "Mehta", "Saxena", "Banerjee", "Mishra"
+]
+
+western_first_names = [
+    "John", "David", "Mary", "Sarah", "Michael", "Jennifer", "James", "Linda", "Robert", "Elizabeth",
+    "William", "Thomas", "Daniel", "Emily", "Matthew", "Christopher", "Ashley", "Jessica", "Andrew", "Michelle",
+    "Brian", "Kevin", "Sophia", "Olivia", "Benjamin", "Anthony", "Rebecca", "George", "Richard", "Anna",
+    "Charles", "Amanda", "Paul", "Steven", "Laura", "Julie", "Karen", "Henry", "Scott", "Victoria"
+]
+western_last_names = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis", "Garcia", "Rodriguez", "Wilson",
+    "Taylor", "Anderson", "Thomas", "Moore", "Martin", "Jackson", "Thompson", "White", "Harris", "Clark",
+    "Lewis", "Walker", "Allen", "King", "Wright", "Scott", "Green", "Baker", "Hall", "Adams",
+    "Nelson", "Carter", "Mitchell", "Perez", "Roberts", "Turner", "Phillips", "Campbell", "Evans", "Edwards"
+]
+
+# Updated product types (removed Home and Marriage loans)
+product_types = [
+    "Personal loan", "Auto loan", "Credit card",
+    "Education loan", "Business loan"
+]
+interest_rates = {
+    "Personal loan": 8.5, "Auto loan": 9.0, "Credit card": 10.0,
+    "Education loan": 8.0, "Business loan": 9.5
+}
+# Loan amounts in SGD (minimum 5000 for all)
+loan_amount_limits = {
+    "Personal loan": (5000, 100000),
+    "Auto loan": (5000, 200000),
+    "Credit card": (5000, 50000),
+    "Education loan": (5000, 100000),
+    "Business loan": (5000, 500000)
+}
+
+# Income bands in SGD
+income_bands = [
+    "50,000 or Below", "50,000 to 100,000", "100,000 to 200,000",
+    "200,000 to 300,000", "300,000 to 500,000", "500,000 or Above"
+]
+
+# Helper functions
+def generate_singaporean_name():
+    # Singapore's ethnic distribution: ~74% Chinese, ~13% Malay, ~9% Indian, ~4% others
+    ethnicity = np.random.choice(["Chinese", "Malay", "Indian", "Western"],
+                                p=[0.74, 0.13, 0.09, 0.04])
+
+    if ethnicity == "Chinese":
+        first_name = random.choice(chinese_first_names)
+        last_name = random.choice(chinese_last_names)
+    elif ethnicity == "Malay":
+        first_name = random.choice(malay_first_names)
+        last_name = random.choice(malay_last_names)
+    elif ethnicity == "Indian":
+        first_name = random.choice(indian_first_names)
+        last_name = random.choice(indian_last_names)
+    else:
+        first_name = random.choice(western_first_names)
+        last_name = random.choice(western_last_names)
+
+    return f"{first_name} {last_name}"
+
+def generate_loan_amount(product_type):
+    min_amt, max_amt = loan_amount_limits[product_type]
+    # Ensure amount is multiple of appropriate step
+    if product_type in ["Auto loan", "Business loan"]:
+        step = 5000
+    else:
+        step = 1000
+    amount = np.random.choice(range(min_amt, max_amt + 1, step))
+    return round(float(amount), 2)
+
+def calculate_emi(principal, rate, tenure):
+    monthly_rate = rate / 1200  # Convert annual percentage to monthly decimal
+    emi = (principal * monthly_rate * (1 + monthly_rate) ** tenure) / ((1 + monthly_rate) ** tenure - 1)
+    return round(emi, 2)
+
+def adjust_emi_for_delinquency(base_emi, days_past_due):
+    if days_past_due <= 0:
+        return base_emi
+    elif days_past_due <= 15:
+        return round(base_emi * 1.02, 2)  # 2% increase
+    elif days_past_due <= 30:
+        return round(base_emi * 1.05, 2)  # 5% increase
+    elif days_past_due <= 60:
+        return round(base_emi * 1.08, 2)  # 8% increase
+    elif days_past_due <= 90:
+        return round(base_emi * 1.12, 2)  # 12% increase
+    else:
+        return round(base_emi * 1.15, 2)  # 15% increase
+
+def calculate_outstanding_balance(loan_amount, interest_rate, tenure, months_completed, emi_paid, days_past_due):
+    if months_completed >= tenure:
+        # Loan should be fully paid, but we need to ensure it's not zero
+        return round(loan_amount * 0.01, 2)  # Return a small amount (1% of loan amount)
+
+    # Calculate remaining principal using amortization formula
+    monthly_rate = interest_rate / 1200
+    remaining_periods = tenure - months_completed
+
+    # Calculate the remaining principal
+    remaining_principal = emi_paid * ((1 - (1 + monthly_rate) ** -remaining_periods) / monthly_rate)
+
+    # Add penalty interest for days past due
+    if days_past_due > 0:
+        penalty_rate = 0
+        if days_past_due <= 15:
+            penalty_rate = 0.02
+        elif days_past_due <= 30:
+            penalty_rate = 0.05
+        elif days_past_due <= 60:
+            penalty_rate = 0.08
+        elif days_past_due <= 90:
+            penalty_rate = 0.12
+        else:
+            penalty_rate = 0.15
+
+        penalty_interest = remaining_principal * (penalty_rate / 365) * days_past_due
+        remaining_principal += penalty_interest
+
+    # Ensure the outstanding balance is at least 1% of the original loan amount
+    min_outstanding = loan_amount * 0.01
+    return max(min_outstanding, round(remaining_principal, 2))
+
+def generate_customer_id():
+    return f"SCB{np.random.randint(100000000, 999999999)}"
+
+def generate_singapore_address():
+    district = random.choice(list(singapore_districts.keys()))
+    area = random.choice(singapore_districts[district])
+    street = random.choice(street_names)
+    house_number = random.randint(1, 999)
+    unit = f"#{random.randint(1, 50):02d}-{random.randint(1, 99):02d}"
+    postal_code = random.randint(100000, 999999)
+    return f"{house_number} {street} {unit} {area} Singapore {postal_code} Singapore"
+
+def calculate_day_past_due(last_payment_date, due_date):
+    if last_payment_date >= due_date:
+        return 0
+
+    # Calculate the difference in days
+    days_diff = (due_date - last_payment_date).days
+
+    # If the difference is less than 30 days, no days past due
+    if days_diff <= 30:
+        return 0
+
+    # If more than 30 days, subtract 30 to get the actual days past due
+    return days_diff - 30
+
+def determine_payment_frequency(on_time_percentage):
+    return "Regular" if on_time_percentage >= 0.8 else "Irregular"
+
+def calculate_credit_score(payment_history, bounce_history, delinquency, partial_payments):
+    base_score = 650
+    # Payment history impact (up to ±100 points)
+    payment_impact = (payment_history - 0.5) * 200
+    # Bounce history impact (up to -50 points)
+    bounce_impact = -min(bounce_history * 10, 50)
+    # Delinquency impact (up to -100 points)
+    delinquency_impact = -50 if delinquency else 0
+    # Partial payment impact
+    partial_impact = -20 if partial_payments else 0
+
+    score = base_score + payment_impact + bounce_impact + delinquency_impact + partial_impact
+    return max(300, min(850, int(score)))
+
+def determine_smartphone_penetration(age, occupation):
+    if age > 60:
+        return "Low"  # Older people less likely to use smartphones
+    elif occupation in ["Student", "Employed", "Self-Employed"]:
+        return "High"  # Working people and students more likely to use smartphones
+    elif occupation in ["Retired", "Homemaker"]:
+        return "Medium"
+    else:
+        return "Low"
+
+# Generate base data
+np.random.seed(42)
+data = []
+
+for _ in range(num_records):
+    product_type = np.random.choice(product_types)
+    tenure = int(np.random.choice([12, 24, 36, 48, 60]))
+    loan_amount = generate_loan_amount(product_type)
+    interest_rate = interest_rates[product_type]
+    base_emi = calculate_emi(loan_amount, interest_rate, tenure)
+
+    # Generate realistic dates
+    days_since_loan_start = int(np.random.randint(180, 1800))
+    loan_start_date = datetime.now() - timedelta(days=days_since_loan_start)
+    months_completed = min(tenure-1, int((datetime.now() - loan_start_date).days / 30))  # Ensure not fully paid
+
+    # Next due date should be in the future
+    next_due_date = datetime.now() + timedelta(days=int(np.random.randint(1, 30)))
+
+    # Calculate payment behavior
+    on_time_percentage = np.random.uniform(0.5, 1.0)
+    payment_frequency = determine_payment_frequency(on_time_percentage)
+
+    # Determine last payment date based on payment behavior
+    if np.random.random() < on_time_percentage:
+        # On-time payment: paid before or on the due date of the previous installment
+        prev_due_date = next_due_date - timedelta(days=30)
+        # Last payment date is before or on the previous due date
+        days_before = int(np.random.randint(0, 30))
+        last_payment_date = prev_due_date - timedelta(days=days_before)
+    else:
+        # Late payment: paid after the due date
+        days_late = int(np.random.randint(1, 120))  # Up to 120 days late
+        prev_due_date = next_due_date - timedelta(days=30)
+        last_payment_date = prev_due_date + timedelta(days=days_late)
+
+    # Ensure last payment date is in the past
+    if last_payment_date > datetime.now():
+        last_payment_date = datetime.now() - timedelta(days=int(np.random.randint(1, 30)))
+
+    # Calculate days past due based on the new logic
+    day_past_due = calculate_day_past_due(last_payment_date, next_due_date)
+
+    # Adjust EMI based on days past due
+    current_emi = adjust_emi_for_delinquency(base_emi, day_past_due)
+
+    # Calculate outstanding balance
+    amount_paid_each_month = base_emi  # Actual EMI paid
+    outstanding_balance = calculate_outstanding_balance(
+        loan_amount, interest_rate, tenure, months_completed,
+        amount_paid_each_month, day_past_due
+    )
+
+    # Bounce history based on payment behavior
+    bounce_probability = 0.3 if on_time_percentage < 0.7 else 0.1
+    bounce_history = int(np.random.poisson(bounce_probability * months_completed / 12))
+
+    # Partial payment indicator
+    partial_payment = np.random.choice([True, False], p=[0.2, 0.8])
+
+    # Credit score calculation
+    delinquency = np.random.choice([True, False], p=[0.2, 0.8])
+    credit_score = calculate_credit_score(on_time_percentage, bounce_history, delinquency, partial_payment)
+
+    # Singapore economic indicators (approximate 2023 values)
+    unemployment_rate = round(np.random.uniform(1.8, 2.2), 2)
+    inflation_rate = round(np.random.uniform(4.0, 5.5), 2)
+    interest_trend = round(np.random.uniform(-0.2, 0.5), 2)
+    economic_stress = round(np.random.uniform(0.1, 0.4), 2)
+
+    # Contact history metrics
+    call_attempts = int(np.random.poisson(3))
+    sms_attempts = int(np.random.poisson(5))
+    whatsapp_attempts = int(np.random.poisson(2))
+    email_attempts = int(np.random.poisson(1))
+
+    # Calculate total contact attempts
+    no_of_attempts = call_attempts + sms_attempts + whatsapp_attempts + email_attempts
+
+    # Generate customer details
+    age = int(np.random.randint(25, 70))
+    occupation = np.random.choice(["Employed", "Self-Employed", "Student", "Retired", "Unemployed", "Homemaker"])
+    smartphone_penetration = determine_smartphone_penetration(age, occupation)
+
+    # Gender with Others being less common
+    gender = np.random.choice(["Male", "Female", "Others"], p=[0.48, 0.48, 0.04])
+
+    record = {
+        "Customer_id": generate_customer_id(),
+        "Loan_Account_id": int(np.random.randint(10000000, 99999999)),
+        "Product_Type": product_type,
+        "Loan_Amount_SGD": loan_amount,
+        "Outstanding_Balance_SGD": outstanding_balance,
+        "Day_Past_Due": day_past_due,
+        "Tenure": tenure,
+        "Interest_Rate": interest_rate,
+        "Current_EMI_SGD": current_emi,
+        "Installment_Due_Date": next_due_date.date(),
+        "Last_Payment_Date": last_payment_date.date(),
+        "Partial_Payment_Indicator": partial_payment,
+        "Number_of_Past_Payments": months_completed,
+        "Payment_Frequency": payment_frequency,
+        "Amount_Paid_Each_Month_SGD": amount_paid_each_month,
+        "Bounce_History": bounce_history,
+        "Settlement_History": np.random.choice(["Settled", "Partial Settlement", "Not Settled", "Under Negotiation"]),
+        "Repayment_Irregularity_Flags": on_time_percentage < 0.7,
+        "Contact_History_Call_Attempts": call_attempts,
+        "Contact_History_SMS": sms_attempts,
+        "Contact_History_WhatsApp": whatsapp_attempts,
+        "Contact_History_EmailLogs": email_attempts,
+        "Channel_used": np.random.choice(["Call", "SMS", "WhatsApp", "Email", "Field Agent", "IVR"]),
+        "Response_Outcome": np.random.choice(["Connected", "Promised to pay", "Ignored", "Disconnected", "Paid fully", "Partial paid"]),
+        "No_of_Attempts": no_of_attempts,  # New column added here
+        "Average_Handling_Time": round(np.random.uniform(10, 30), 2),  # Between 10-30 seconds
+        "Name": generate_singaporean_name(),
+        "Age": age,
+        "Gender": gender,
+        "Occupation": occupation,
+        "Income_Band_SGD": np.random.choice(income_bands),
+        "Employeement_Type": np.random.choice(["Full time", "Part time", "Contract", "Freelance", "Unemployed"]),
+        "Address": generate_singapore_address(),
+        "Urban_Rural_Tag": "Urban",
+        "Language_Preference": np.random.choice(["English", "Regional"], p=[0.7, 0.3]),
+        "Mobile_Number_Active_Status": np.random.choice([True, False], p=[0.9, 0.1]),
+        "Email_Activity": np.random.choice([True, False], p=[0.8, 0.2]),
+        "App_Login_Frequency": int(np.random.poisson(10)),
+        "UPI_Transactions": int(np.random.poisson(15)),
+        "Online_Banking_Activity": int(np.random.poisson(8)),
+        "Smartphone_Penetration": smartphone_penetration,
+        "Preferred_Channel": np.random.choice(["Call", "SMS", "WhatsApp", "Email", "App notification", "Field Agent", "IVR"]),
+        "Call_SMS_Activity_Patterns": np.random.choice(["Low", "Medium", "High"]),
+        "WhatsApp_OTT_usage_Indicator": np.random.choice([True, False], p=[0.8, 0.2]),
+        "Credit_Score": credit_score,
+        "Recent_Inquiries": int(np.random.poisson(2)),
+        "Loan_Exposure_Across_Banks": int(np.random.poisson(1)),
+        "Delinquency_on_other_Loans": delinquency,
+        "Recent_Score_Change": int(np.random.randint(-50, 50)),
+        "Unemployeement_rate_region": unemployment_rate,
+        "Inflation_Rate": inflation_rate,
+        "Interest_Rate_Trend": interest_trend,
+        "Economic_Stress_Index": economic_stress,
+        "Do_Not_Call_Registry_Data": np.random.choice([True, False], p=[0.2, 0.8]),
+        "Regional_Time_Restrictions": np.random.choice(["Morning", "Afternoon", "Evening", "Night"]),
+        "Communication_Complaince_Limits": np.random.choice(["Daytime", "Evening", "Weekdays", "Weekends", "Holidays"])
+    }
+    data.append(record)
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Validate constraints
+assert all(5000 <= amt <= 500000 for amt in df.Loan_Amount_SGD)
+assert all(ob > 0 for ob in df.Outstanding_Balance_SGD)
+assert all(tenure in [12,24,36,48,60] for tenure in df.Tenure)
+assert all(8.0 <= rate <= 10.0 for rate in df.Interest_Rate)
+assert all(10 <= aht <= 30 for aht in df.Average_Handling_Time)
+
+# Format float columns to 2 decimal places
+float_columns = df.select_dtypes(include=['float64']).columns
+df[float_columns] = df[float_columns].round(2)
+
+# Save to CSV
+df.to_csv('singapore_loan_data.csv', index=False)
+
+print(f"Generated {len(df)} records")
+print("Data saved to singapore_loan_data.csv")
+print(df[['Name', 'Product_Type', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Current_EMI_SGD', 'Day_Past_Due', 'Last_Payment_Date', 'Installment_Due_Date', 'No_of_Attempts']].head(10))
