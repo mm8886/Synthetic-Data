@@ -1,0 +1,49 @@
+Here is the revised documentation, with the 6th point replaced (removing “Free-Text Cleaning/Parsing” as a not-used method and not replacing it with manual feature extraction). The 6th point now covers *“Imputation for Highly Missing Columns”*, which is a standard cleaning technique often needed in real datasets but not utilized in this pipeline:
+
+***
+
+### Data Cleaning Techniques Used in the Pipeline (7)
+
+- *1. Address Parsing (City & Pincode Extraction)*  
+  The pipeline extracts the City and Pincode from the free-text Address field.  
+  Reason for use: Enables location-based analysis and ensures consistent geospatial feature extraction. Address text is dropped to avoid redundancy.
+
+- *2. Phone Number Cleaning & Validation*  
+  It standardizes the phone numbers (removes country code, symbols, spaces), then validates if they conform to Singapore’s 8-digit number rules, and flags validity.  
+  Reason for use: Phone numbers might be stored with different formats; flagging ensures downstream communication and fraud analysis uses only valid contacts.
+
+- *3. Email Address Validation & Domain Checks*   
+  The pipeline verifies email format, extracts the provider domain (e.g., gmail.com), flags if the domain is from a legitimate service, and detects disposable emails.  
+  Reason for use: Prevents issues from incorrectly-formatted or throwaway email addresses and strengthens identity verification.
+
+- *4. Boolean Value Standardization*  
+  Various boolean columns (e.g., Partial_Payment_Indicator) are harmonized to actual boolean types (True/False) from mixed text and numeric codes.  
+  Reason for use: Ensures consistent logic for ML tasks and metrics, regardless of original representation.
+
+- *5. Income Band Encoding*  
+  The ordinal Income_Band_SGD strings are mapped to ordered integers, reflecting economic levels.  
+  Reason for use: Preserves socioeconomic order while simplifying input for numeric models.
+
+- *6. Date Feature Extraction*  
+  The pipeline converts date columns into year, month, day of week features, dropping raw dates.  
+  Reason for use: Makes temporal information usable for feature engineering (e.g., payment seasonality).
+
+- *7. Digital Engagement Feature Creation*  
+  Constructs a Digital_Engagement_Score from usage/activity columns, summarizing digital financial activity.  
+  Reason for use: Creates a composite indicator for modeling customer digital interaction and possible risk.
+
+***
+
+### Data Cleaning Techniques Not Used in the Pipeline (3)
+
+- *1. Outlier Detection and Treatment*  
+  Why not used: The pipeline does not cap, remove, or analyze outliers (e.g., in Loan_Amount_SGD or Age).  
+  Reason for omission: Synthetic datasets are designed to avoid extreme anomalies; actual banking data would need this to prevent model bias or instability.
+
+- *2. Complex Deduplication/Fuzzy Entity Resolution*  
+  Only exact duplicates are removed by row. It does not attempt to match nearly-duplicate records or resolve minor entry mistakes across identifier fields.  
+  Reason for omission: Synthetic datasets do not mimic real-life problems of multiple/merged customer records. Real systems need this for accurate customer-level analytics.
+
+- *3. Imputation for Highly Missing Columns*  
+  The pipeline uses simple imputation for most fields but does *not* apply advanced or tailored imputation for columns with very high missingness (such as using regression or multiple imputation techniques, or dropping columns above a missingness threshold).  
+  Reason for omission: Synthetic datasets usually avoid columns with substantial missing values by design, so advanced strategies are unnecessary. Real datasets sometimes have fields missing for the majority of customers, where advanced methods or dropped columns are critical for reliability.
