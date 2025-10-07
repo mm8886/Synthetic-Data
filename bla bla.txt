@@ -48,118 +48,60 @@ st.markdown("""
         font-weight: 400;
     }
     
-    /* Logo styling - for sidebar */
-    .stImage > div {
-        display: flex;
-        justify-content: center;
-    }
-    
-    /* Customer info cards */
-    .customer-info {
+    /* Clean Card Styling */
+    .clean-card {
         background-color: #FFFFFF;
         padding: 1.5rem;
-        border-radius: 10px;
-        border: 2px solid #E5E7EB;
+        border-radius: 8px;
+        border: 1px solid #E5E7EB;
         margin: 1rem 0;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
     }
     
-    /* Prediction results */
-    .prediction-result {
+    .prediction-card {
         background-color: #F8FAFF;
         padding: 1.5rem;
-        border-radius: 10px;
-        border: 2px solid var(--sc-blue);
-        margin: 1rem 0;
-        box-shadow: 0 4px 12px rgba(15, 76, 153, 0.15);
-    }
-    
-    /* Channel ranking cards */
-    .channel-ranking {
-        background-color: #FFFFFF;
-        padding: 1rem;
         border-radius: 8px;
-        border: 2px solid #E5E7EB;
-        margin: 0.5rem 0;
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: #1F2937;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        border: 1px solid #0F4C99;
+        margin: 1rem 0;
     }
     
-    /* Recommendation box */
-    .recommendation-box {
+    .recommendation-card {
         background-color: #F0FDF4;
         padding: 1.5rem;
-        border-radius: 10px;
-        border: 2px solid var(--sc-green);
+        border-radius: 8px;
+        border: 1px solid #00B04F;
         margin: 1rem 0;
-        box-shadow: 0 2px 8px rgba(0, 176, 79, 0.1);
     }
     
-    /* Sidebar styling */
-    .sidebar .sidebar-content {
-        background-color: var(--sc-light-gray);
-    }
-    
-    /* Button styling */
+    /* Button Styling */
     .stButton > button {
         background-color: var(--sc-blue);
         color: white;
-        border-radius: 8px;
+        border-radius: 6px;
         border: none;
         font-weight: 500;
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
     }
     
     .stButton > button:hover {
-        background-color: var(--sc-light-blue);
-        box-shadow: 0 2px 8px rgba(15, 76, 153, 0.3);
+        background-color: #0D3F80;
+        box-shadow: 0 2px 4px rgba(15, 76, 153, 0.2);
     }
     
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: #F8FAFC;
-        padding: 4px;
-        border-radius: 8px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background-color: #FFFFFF;
-        border: 2px solid #E5E7EB;
-        border-radius: 6px;
-        color: var(--sc-blue);
-        font-weight: 600;
-        padding: 8px 16px;
-        margin: 0 2px;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: var(--sc-blue);
+    .secondary-button > button {
+        background-color: #6B7280;
         color: white;
-        border-color: var(--sc-blue);
     }
     
-    /* Metric styling */
-    [data-testid="metric-container"] {
-        background-color: var(--sc-white);
-        border: 1px solid var(--sc-light-gray);
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid var(--sc-green);
+    .success-button > button {
+        background-color: var(--sc-green);
+        color: white;
     }
     
-    /* Remove tab content area override - let Streamlit handle it naturally */
-    
-    /* Remove default streamlit padding */
-    .element-container {
-        margin-bottom: 0.5rem;
-    }
-    
-    /* Fix main content area */
-    .main > div {
-        padding-top: 1rem;
+    /* Sidebar Styling */
+    .sidebar .sidebar-content {
+        background-color: #F8FAFC;
     }
     
     /* Horizontal channel tiles */
@@ -173,50 +115,60 @@ st.markdown("""
     
     .channel-tile {
         flex: 0 0 auto;
-        width: 150px;
-        padding: 15px;
-        border-radius: 8px;
+        width: 140px;
+        padding: 12px;
+        border-radius: 6px;
         text-align: center;
         font-weight: bold;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        border: 1px solid #E5E7EB;
     }
     
     .tile-rank-1 {
         background-color: #00B04F;
         color: white;
+        border-color: #00B04F;
     }
     
     .tile-rank-2 {
         background-color: #0F4C99;
         color: white;
+        border-color: #0F4C99;
     }
     
     .tile-rank-3 {
         background-color: #4A90E2;
         color: white;
+        border-color: #4A90E2;
     }
     
     .tile-rank-other {
-        background-color: #F3F4F6;
+        background-color: #FFFFFF;
         color: #1F2937;
+        border-color: #D1D5DB;
     }
     
     /* Batch prediction styling */
-    .batch-stats {
-        background: linear-gradient(135deg, #0F4C99 0%, #4A90E2 100%);
-        color: white;
+    .batch-section {
+        background-color: #F8FAFC;
         padding: 1.5rem;
-        border-radius: 10px;
+        border-radius: 8px;
+        border: 1px solid #E5E7EB;
         margin: 1rem 0;
     }
     
-    .download-btn {
-        background-color: #00B04F !important;
-        color: white !important;
-        border: none !important;
-        padding: 0.5rem 1rem !important;
-        border-radius: 8px !important;
-        font-weight: 600 !important;
+    /* Metric Cards */
+    [data-testid="metric-container"] {
+        background-color: white;
+        border: 1px solid #E5E7EB;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #00B04F;
+    }
+    
+    /* Remove default streamlit padding */
+    .element-container {
+        margin-bottom: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -342,17 +294,15 @@ class ChannelPredictor:
         
         return channel_predictions
     
-    def predict_batch(self, sample_size=None):
-        """Predict channel preferences for all customers in batch"""
+    def predict_batch(self, start_idx=0, end_idx=None):
+        """Predict channel preferences for a range of customers"""
         if self.df is None:
             return None, "Customer data not loaded"
         
-        # Use sample if specified, otherwise use full dataset
-        if sample_size and sample_size < len(self.df):
-            customers_to_predict = self.df.sample(sample_size)
-        else:
-            customers_to_predict = self.df
+        if end_idx is None or end_idx > len(self.df):
+            end_idx = len(self.df)
         
+        customers_to_predict = self.df.iloc[start_idx:end_idx]
         results = []
         
         # Progress bar
@@ -530,13 +480,13 @@ def main():
     predictor = ChannelPredictor()
     
     # Standard Chartered logo in sidebar
-    logo_files = ["standard_chartered_logo.png", "standard_chartered_logo.jpg", 
+    logo_files = ["logo.svg", "standard_chartered_logo.png", "standard_chartered_logo.jpg", 
                   "sc_logo.png", "logo.png", "Standard_Chartered_logo.png"]
     logo_displayed = False
     
     for logo_file in logo_files:
         try:
-            st.sidebar.image(logo_file, width=220)
+            st.sidebar.image(logo_file, width=200)
             logo_displayed = True
             break
         except:
@@ -547,19 +497,15 @@ def main():
         st.sidebar.markdown("""
         <div style='text-align: center; padding: 1rem; margin-bottom: 1rem;'>
             <div style='font-family: Arial, sans-serif;'>
-                <span style='color: #0066CC; font-size: 2rem; font-weight: bold; letter-spacing: -1px;'>S</span>
-                <span style='color: #666666; font-size: 1.2rem; font-weight: 300; margin-left: 0.3rem;'>standard</span><br>
-                <span style='color: #666666; font-size: 1.2rem; font-weight: 300; margin-left: 1.5rem;'>chartered</span>
+                <span style='color: #0F4C99; font-size: 1.8rem; font-weight: bold;'>Standard Chartered</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
     
-    # Sidebar for model selection with SC branding
+    # Sidebar for model selection
     st.sidebar.markdown("""
-    <div style='background: linear-gradient(135deg, #0F4C99 0%, #4A90E2 100%); 
-                padding: 1rem; border-radius: 10px; margin-bottom: 1rem; text-align: center;'>
-        <h3 style='color: white; margin: 0;'>⚙️ Model Settings</h3>
-        <p style='color: #E3F2FD; margin: 0.5rem 0 0 0; font-size: 0.9rem;'>Standard Chartered AI</p>
+    <div style='background-color: #0F4C99; color: white; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; text-align: center;'>
+        <h3 style='color: white; margin: 0;'>Model Settings</h3>
     </div>
     """, unsafe_allow_html=True)
     
@@ -578,7 +524,7 @@ def main():
     selected_model_file = model_files[model_option]
     
     # Load model and data
-    if st.sidebar.button("🔄 Load Model & Data"):
+    if st.sidebar.button("🔄 Load Model & Data", use_container_width=True):
         with st.spinner("Loading model and customer data..."):
             model_loaded = predictor.load_model(selected_model_file)
             data_loaded = predictor.load_customer_data('features_with_labels.csv')
@@ -600,7 +546,7 @@ def main():
     # Check if model is loaded and show prediction type selection
     if hasattr(st.session_state, 'show_prediction_type') and st.session_state.show_prediction_type:
         st.markdown("---")
-        st.subheader("🎯 Select Prediction Type")
+        st.subheader("Select Prediction Type")
         
         col1, col2 = st.columns(2)
         
@@ -622,51 +568,46 @@ def main():
         # Get predictor from session state
         predictor = st.session_state.predictor
         
-        st.info("""
-        **Batch Prediction Features:**
-        - Predict channel preferences for all customers in the dataset
-        - Generate comprehensive channel ranking for each customer
-        - Download complete results or aggregated summaries
-        """)
+        st.info("Generate channel predictions for multiple customers at once")
         
         # Batch prediction options
+        st.markdown('<div class="batch-section">', unsafe_allow_html=True)
+        st.write("**Prediction Range**")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("**Prediction Scope**")
-            prediction_scope = st.radio(
-                "Select prediction scope:",
-                ["Full Dataset", "Sample Dataset"],
-                help="Full dataset may take longer to process"
+            start_idx = st.number_input(
+                "Start Index:",
+                min_value=0,
+                max_value=len(predictor.df)-1,
+                value=0,
+                help="Starting index of customers to process"
             )
-            
-            if prediction_scope == "Sample Dataset":
-                sample_size = st.slider(
-                    "Sample size:",
-                    min_value=100,
-                    max_value=min(5000, len(predictor.df)),
-                    value=1000,
-                    step=100
-                )
-            else:
-                sample_size = None
         
         with col2:
-            st.write("**Dataset Information**")
-            st.metric("Total Customers", f"{len(predictor.df):,}")
-            st.metric("Available Channels", len(predictor.channels))
-            st.metric("Current Model", st.session_state.current_model)
+            end_idx = st.number_input(
+                "End Index:",
+                min_value=1,
+                max_value=len(predictor.df),
+                value=min(1000, len(predictor.df)),
+                help="Ending index of customers to process"
+            )
+        
+        st.write(f"**Processing:** Customers {start_idx} to {end_idx} ({end_idx - start_idx} total)")
         
         # Run batch prediction
         if st.button("🚀 Run Batch Prediction", type="primary", use_container_width=True):
             with st.spinner("Running batch predictions... This may take a few minutes."):
-                batch_results, error = predictor.predict_batch(sample_size=sample_size)
+                batch_results, error = predictor.predict_batch(start_idx=start_idx, end_idx=end_idx)
                 
                 if error:
                     st.error(f"Error in batch prediction: {error}")
                 else:
                     st.session_state.batch_results = batch_results
                     st.success(f"✅ Batch prediction completed! Processed {len(batch_results):,} customers.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
         
         # Display batch results if available
         if hasattr(st.session_state, 'batch_results') and st.session_state.batch_results is not None:
@@ -693,9 +634,20 @@ def main():
                 channels_covered = batch_results['1_Preferred_Channel'].nunique()
                 st.metric("Channels Used", channels_covered)
             
+            # Filter options for first preferred channel
+            st.write("**Filter by First Preferred Channel:**")
+            all_channels = ['All'] + sorted(batch_results['1_Preferred_Channel'].unique().tolist())
+            selected_channel = st.selectbox("Select channel to filter:", all_channels)
+            
+            if selected_channel != 'All':
+                filtered_results = batch_results[batch_results['1_Preferred_Channel'] == selected_channel]
+                st.write(f"Showing {len(filtered_results)} customers with {selected_channel} as first preference")
+            else:
+                filtered_results = batch_results
+            
             # Display sample of results
-            st.write("**Sample of Prediction Results:**")
-            st.dataframe(batch_results.head(10), use_container_width=True)
+            st.write("**Prediction Results:**")
+            st.dataframe(filtered_results.head(20), use_container_width=True)
             
             # Download buttons
             st.markdown("---")
@@ -705,33 +657,29 @@ def main():
             
             with col1:
                 # Complete results download
-                csv_complete = convert_df_to_csv(batch_results)
+                csv_complete = convert_df_to_csv(filtered_results)
                 st.download_button(
-                    label="📄 Download Complete Results (CSV)",
+                    label="📄 Download Filtered Results (CSV)",
                     data=csv_complete,
-                    file_name=f"channel_predictions_complete_{len(batch_results)}_customers.csv",
+                    file_name=f"channel_predictions_{selected_channel.lower()}_{len(filtered_results)}_customers.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
             
             with col2:
-                # Aggregated results (first preferred channel counts)
-                channel_counts = batch_results['1_Preferred_Channel'].value_counts().reset_index()
-                channel_counts.columns = ['Preferred_Channel', 'Customer_Count']
-                channel_counts['Percentage'] = (channel_counts['Customer_Count'] / len(batch_results) * 100).round(2)
-                
-                csv_aggregated = convert_df_to_csv(channel_counts)
+                # All results download
+                csv_all = convert_df_to_csv(batch_results)
                 st.download_button(
-                    label="📊 Download Channel Distribution (CSV)",
-                    data=csv_aggregated,
-                    file_name="channel_distribution_summary.csv",
+                    label="📊 Download All Results (CSV)",
+                    data=csv_all,
+                    file_name=f"channel_predictions_all_{len(batch_results)}_customers.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
             
             # Visualize channel distribution
             st.markdown("---")
-            st.subheader("📈 Channel Distribution Analysis")
+            st.subheader("📈 Channel Distribution")
             
             col1, col2 = st.columns(2)
             
@@ -742,12 +690,16 @@ def main():
                     x=channel_dist.values,
                     y=channel_dist.index,
                     orientation='h',
-                    title="Distribution of Top Preferred Channels",
+                    title="Top Preferred Channels",
                     labels={'x': 'Number of Customers', 'y': 'Channel'},
                     color=channel_dist.values,
-                    color_continuous_scale='Viridis'
+                    color_continuous_scale=['#0F4C99', '#00B04F']
                 )
-                fig_bar.update_layout(height=400)
+                fig_bar.update_layout(
+                    height=400,
+                    showlegend=False,
+                    plot_bgcolor='white'
+                )
                 st.plotly_chart(fig_bar, use_container_width=True)
             
             with col2:
@@ -755,20 +707,11 @@ def main():
                 fig_pie = px.pie(
                     values=channel_dist.values,
                     names=channel_dist.index,
-                    title="Top Channel Preference Distribution",
-                    hole=0.3
+                    title="Channel Preference Distribution",
+                    color_discrete_sequence=['#0F4C99', '#00B04F', '#4A90E2', '#6B7280', '#9CA3AF', '#D1D5DB']
                 )
                 fig_pie.update_layout(height=400)
                 st.plotly_chart(fig_pie, use_container_width=True)
-            
-            # Show detailed statistics
-            with st.expander("📊 Detailed Statistics"):
-                st.write("**Channel Preference Summary:**")
-                for i in range(1, 7):
-                    col_name = f'{i}_Preferred_Channel'
-                    if col_name in batch_results.columns:
-                        st.write(f"**{i}st Preferred Channel Distribution:**")
-                        st.dataframe(batch_results[col_name].value_counts().head(10), use_container_width=True)
         
         # Back button
         if st.button("← Back to Prediction Type Selection"):
@@ -800,7 +743,7 @@ def main():
         with predict_col:
             st.write("")  # Spacer for alignment
             st.write("")  # Spacer for alignment
-            if st.button("🎯 Predict Channel Preferences", type="primary", use_container_width=True):
+            if st.button("🎯 Predict", type="primary", use_container_width=True):
                 if customer_id_input:
                     with st.spinner("Looking up customer and generating predictions..."):
                         # Get customer data
@@ -827,33 +770,66 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                # Filter by segment
+                # Filter by segment with descriptions
                 if 'Customer_Segment' in predictor.df.columns:
-                    segment_options = ['All'] + predictor.df['Customer_Segment'].unique().tolist()
+                    segment_options = ['All'] 
+                    # Add segment options with descriptions
+                    if 'Young' in predictor.df['Customer_Segment'].unique():
+                        segment_options.append('Young (18-30 years)')
+                    if 'Senior' in predictor.df['Customer_Segment'].unique():
+                        segment_options.append('Senior (60+ years)')
+                    if 'Traditional' in predictor.df['Customer_Segment'].unique():
+                        segment_options.append('Traditional (low digital engagement)')
+                    if 'High Value Digital' in predictor.df['Customer_Segment'].unique():
+                        segment_options.append('High Value Digital (digital savvy)')
+                    if 'Standard' in predictor.df['Customer_Segment'].unique():
+                        segment_options.append('Standard (default category)')
+                    
+                    # Add any other segments without descriptions
+                    other_segments = [seg for seg in predictor.df['Customer_Segment'].unique() 
+                                    if seg not in ['Young', 'Senior', 'Traditional', 'High Value Digital', 'Standard']]
+                    segment_options.extend(other_segments)
+                    
                     selected_segment = st.selectbox("Filter by Segment:", segment_options)
                 else:
                     selected_segment = 'All'
-                
-                # Age range filter
-                st.write("Age Range: 18-80 years")
             
             with col2:
                 # Search by ID pattern
                 id_pattern = st.text_input("Customer ID Pattern:", placeholder="e.g., SCB2*, *598, SCB*")
             
-            # Show random customers button
-            if st.button("🎲 Show 30 Random Customers"):
-                st.session_state.random_customers = predictor.df['Customer_id'].sample(30).tolist()
+            # Search button
+            if st.button("🔍 Search Customers", use_container_width=True):
+                # Apply filters and get matching customers
+                filtered_df = predictor.df.copy()
+                
+                if selected_segment != 'All':
+                    # Extract segment name without description
+                    segment_name = selected_segment.split(' (')[0]
+                    filtered_df = filtered_df[filtered_df['Customer_Segment'] == segment_name]
+                
+                if id_pattern:
+                    # Convert pattern to regex
+                    regex_pattern = id_pattern.replace('*', '.*')
+                    filtered_df = filtered_df[
+                        filtered_df['Customer_id'].str.contains(regex_pattern, case=False, na=False)
+                    ]
+                
+                if len(filtered_df) > 0:
+                    st.session_state.search_results = filtered_df['Customer_id'].head(30).tolist()
+                    st.success(f"Found {len(filtered_df)} customers matching criteria")
+                else:
+                    st.warning("No customers found with these criteria")
             
-            # Display random customers if available
-            if hasattr(st.session_state, 'random_customers') and st.session_state.random_customers:
+            # Display search results if available
+            if hasattr(st.session_state, 'search_results') and st.session_state.search_results:
                 st.write("**Click any Customer ID below to select:**")
                 
                 # Display in a grid
                 cols = st.columns(6)
-                for i, customer_id in enumerate(st.session_state.random_customers):
+                for i, customer_id in enumerate(st.session_state.search_results):
                     with cols[i % 6]:
-                        if st.button(customer_id, key=f"rand_btn_{customer_id}", use_container_width=True):
+                        if st.button(customer_id, key=f"search_btn_{customer_id}", use_container_width=True):
                             st.session_state.selected_customer_id = customer_id
                             st.rerun()
         
@@ -877,8 +853,8 @@ def main():
             
             # Customer Profile Details
             if hasattr(st.session_state, 'customer_insights'):
-                st.markdown('<div class="customer-info">', unsafe_allow_html=True)
-                st.subheader("👤 Customer Profile Details")
+                st.markdown('<div class="clean-card">', unsafe_allow_html=True)
+                st.subheader("👤 Customer Profile")
                 
                 insights = st.session_state.customer_insights
                 
@@ -921,35 +897,27 @@ def main():
             top_score = predictions[0]['score']
             
             # Primary Recommendation
-            st.markdown(f"""
-            <div class="recommendation-box">
-                <h4 style='color: #00B04F; margin-bottom: 1rem;'>🎯 Primary Recommendation</h4>
-                <div style='background-color: white; padding: 1rem; border-radius: 8px; border: 2px solid #00B04F;'>
-                    <p style='font-size: 1.1rem; font-weight: bold; color: #0F4C99; margin-bottom: 0.5rem;'>
-                        📞 Contact via: {top_channel}
-                    </p>
-                    <p style='color: #6B7280; margin: 0;'>Confidence Score: {top_score:.4f}</p>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown('<div class="recommendation-card">', unsafe_allow_html=True)
+            st.subheader("🎯 Primary Recommendation")
+            st.write(f"**Contact via:** {top_channel}")
+            st.write(f"**Confidence Score:** {top_score:.4f}")
+            st.markdown('</div>', unsafe_allow_html=True)
             
-            # Business Action Plan (full content, no expander)
-            st.markdown("""
-            <div style='background-color: #F8FAFF; padding: 1.5rem; border-radius: 10px; border: 2px solid #0F4C99; margin: 1rem 0;'>
-                <h4 style='color: #0F4C99; margin-bottom: 1rem;'>💼 Business Action Plan</h4>
-            """, unsafe_allow_html=True)
+            # Business Action Plan
+            st.markdown('<div class="clean-card">', unsafe_allow_html=True)
+            st.subheader("💼 Business Action Plan")
             
             st.write("**Recommended Contact Strategy:**")
             st.write(f"1. **Start with {predictions[0]['channel']}** - Highest success probability (Score: {predictions[0]['score']:.3f})")
             st.write(f"2. **Follow up with {predictions[1]['channel']}** - Second best option (Score: {predictions[1]['score']:.3f})")
             st.write(f"3. **Use {predictions[2]['channel']}** - Alternative if needed (Score: {predictions[2]['score']:.3f})")
             
-            st.write("\n**Channel Effectiveness:**")
+            st.write("**Channel Effectiveness:**")
             for i, pred in enumerate(predictions[:3]):
                 effectiveness = "High" if pred['score'] > 0 else "Medium" if pred['score'] > -1 else "Low"
                 st.write(f"• **{pred['channel']}**: {effectiveness} effectiveness")
             
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
             
             # Channel Preference Ranking in Horizontal Tiles
             st.subheader("📈 Channel Preference Ranking")
@@ -979,16 +947,6 @@ def main():
             channels = [pred['channel'] for pred in predictions]
             scores = [pred['score'] for pred in predictions]
             
-            # Standard Chartered color palette for charts
-            sc_color_scale = [
-                [0.0, '#D1D5DB'],   # Light gray for low scores
-                [0.3, '#9CA3AF'],   # Medium gray
-                [0.5, '#6B7280'],   # Dark gray  
-                [0.7, '#4A90E2'],   # SC Light blue
-                [0.9, '#0F4C99'],   # SC Blue
-                [1.0, '#00B04F']    # SC Green for highest scores
-            ]
-            
             fig = px.bar(
                 x=scores, 
                 y=channels, 
@@ -996,7 +954,7 @@ def main():
                 title="Channel Preference Scores",
                 labels={'x': 'Prediction Score', 'y': 'Communication Channel'},
                 color=scores,
-                color_continuous_scale=sc_color_scale,
+                color_continuous_scale=['#0F4C99', '#00B04F'],
                 text=[f"{score:.3f}" for score in scores]
             )
             
@@ -1004,36 +962,32 @@ def main():
                 height=400,
                 yaxis={'categoryorder': 'total ascending'},
                 showlegend=False,
-                title_font_color='#0F4C99',
-                title_font_size=16,
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)'
+                plot_bgcolor='white',
+                font=dict(color='#1F2937')
             )
-            
-            # Update axis colors
-            fig.update_xaxes(gridcolor='#E5E7EB', title_font_color='#6B7280')
-            fig.update_yaxes(title_font_color='#6B7280')
             
             fig.update_traces(textposition='outside')
             
             st.plotly_chart(fig, use_container_width=True)
     
-    # Footer with Standard Chartered branding
+    # Footer with Standard Chartered logo
     st.markdown("---")
-    st.markdown("""
-    <div style='background: linear-gradient(135deg, #0F4C99 0%, #00B04F 100%); 
-                padding: 2rem; border-radius: 10px; text-align: center; margin-top: 2rem;'>
-        <div style='color: white; font-size: 1.1rem; font-weight: bold; margin-bottom: 0.5rem;'>
-            🏦 Standard Chartered Bank
+    
+    # Try to display SVG logo in footer
+    try:
+        st.image("logo.svg", width=200)
+    except:
+        # Fallback footer
+        st.markdown("""
+        <div style='text-align: center; padding: 2rem; margin-top: 2rem;'>
+            <div style='color: #0F4C99; font-size: 1.1rem; font-weight: bold; margin-bottom: 0.5rem;'>
+                Standard Chartered Bank
+            </div>
+            <div style='color: #6B7280; font-size: 0.9rem;'>
+                AI-Powered Channel Prediction System
+            </div>
         </div>
-        <div style='color: #E3F2FD; font-size: 0.9rem; margin-bottom: 0.5rem;'>
-            AI-Powered Channel Prediction System
-        </div>
-        <div style='color: #B8E6B8; font-size: 0.8rem;'>
-            Optimizing customer communication through machine learning • Powered by LightGBM, XGBoost & Random Forest
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
