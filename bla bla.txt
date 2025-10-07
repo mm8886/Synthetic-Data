@@ -585,6 +585,17 @@ def main():
     if hasattr(st.session_state, 'prediction_type') and st.session_state.prediction_type == "batch":
         st.markdown("---")
         
+        # Check if predictor and data are loaded
+        if not hasattr(st.session_state, 'predictor') or st.session_state.predictor.df is None:
+            st.error("❌ Model and data not loaded. Please load the model and data from the sidebar first.")
+            if st.button("← Back to Prediction Type Selection"):
+                st.session_state.prediction_type = None
+                st.rerun()
+            return
+        
+        # Get predictor from session state
+        predictor = st.session_state.predictor
+        
         # Batch Prediction Section
         with st.container():
             st.subheader("📊 Batch Prediction")
@@ -726,6 +737,14 @@ def main():
     
     # Individual prediction interface
     if hasattr(st.session_state, 'prediction_type') and st.session_state.prediction_type == "individual":
+        # Check if predictor and data are loaded
+        if not hasattr(st.session_state, 'predictor') or st.session_state.predictor.df is None:
+            st.error("❌ Model and data not loaded. Please load the model and data from the sidebar first.")
+            if st.button("← Back to Prediction Type Selection"):
+                st.session_state.prediction_type = None
+                st.rerun()
+            return
+        
         # Get predictor from session state
         predictor = st.session_state.predictor
         
