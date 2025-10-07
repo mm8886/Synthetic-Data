@@ -74,6 +74,14 @@ st.markdown("""
         margin: 1rem 0;
     }
     
+    .section-card {
+        background-color: #F8FAFC;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border: 1px solid #E5E7EB;
+        margin: 1rem 0;
+    }
+    
     /* Button Styling */
     .stButton > button {
         background-color: var(--sc-blue);
@@ -148,13 +156,24 @@ st.markdown("""
         border-color: #D1D5DB;
     }
     
-    /* Batch prediction styling */
-    .batch-section {
-        background-color: #F8FAFC;
-        padding: 1.5rem;
+    /* Footer Styling */
+    .footer {
+        background-color: #0F4C99;
+        color: white;
+        padding: 2rem;
         border-radius: 8px;
-        border: 1px solid #E5E7EB;
-        margin: 1rem 0;
+        margin-top: 2rem;
+        text-align: center;
+    }
+    
+    .footer-logo {
+        margin-bottom: 1rem;
+    }
+    
+    .footer-text {
+        color: #E3F2FD;
+        font-size: 0.9rem;
+        line-height: 1.5;
     }
     
     /* Metric Cards */
@@ -546,172 +565,157 @@ def main():
     # Check if model is loaded and show prediction type selection
     if hasattr(st.session_state, 'show_prediction_type') and st.session_state.show_prediction_type:
         st.markdown("---")
-        st.subheader("Select Prediction Type")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("👤 Individual Prediction", use_container_width=True, type="primary"):
-                st.session_state.prediction_type = "individual"
-                st.rerun()
-        
-        with col2:
-            if st.button("📊 Batch Prediction", use_container_width=True):
-                st.session_state.prediction_type = "batch"
-                st.rerun()
+        # Prediction Type Selection Section
+        with st.container():
+            st.subheader("Select Prediction Type")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("👤 Individual Prediction", use_container_width=True, type="primary"):
+                    st.session_state.prediction_type = "individual"
+                    st.rerun()
+            
+            with col2:
+                if st.button("📊 Batch Prediction", use_container_width=True):
+                    st.session_state.prediction_type = "batch"
+                    st.rerun()
     
     # Handle batch prediction
     if hasattr(st.session_state, 'prediction_type') and st.session_state.prediction_type == "batch":
         st.markdown("---")
-        st.subheader("📊 Batch Prediction")
         
-        # Get predictor from session state
-        predictor = st.session_state.predictor
-        
-        st.info("Generate channel predictions for multiple customers at once")
-        
-        # Batch prediction options
-        st.markdown('<div class="batch-section">', unsafe_allow_html=True)
-        st.write("**Prediction Range**")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            start_idx = st.number_input(
-                "Start Index:",
-                min_value=0,
-                max_value=len(predictor.df)-1,
-                value=0,
-                help="Starting index of customers to process"
-            )
-        
-        with col2:
-            end_idx = st.number_input(
-                "End Index:",
-                min_value=1,
-                max_value=len(predictor.df),
-                value=min(1000, len(predictor.df)),
-                help="Ending index of customers to process"
-            )
-        
-        st.write(f"**Processing:** Customers {start_idx} to {end_idx} ({end_idx - start_idx} total)")
-        
-        # Run batch prediction
-        if st.button("🚀 Run Batch Prediction", type="primary", use_container_width=True):
-            with st.spinner("Running batch predictions... This may take a few minutes."):
-                batch_results, error = predictor.predict_batch(start_idx=start_idx, end_idx=end_idx)
+        # Batch Prediction Section
+        with st.container():
+            st.subheader("📊 Batch Prediction")
+            st.info("Generate channel predictions for multiple customers at once")
+            
+            # Batch prediction options
+            with st.container():
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.write("**Prediction Scope**")
                 
-                if error:
-                    st.error(f"Error in batch prediction: {error}")
+                prediction_scope = st.radio(
+                    "Select prediction scope:",
+                    ["Customer Range", "Full Dataset"],
+                    horizontal=True
+                )
+                
+                if prediction_scope == "Customer Range":
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        start_idx = st.number_input(
+                            "Start Index:",
+                            min_value=0,
+                            max_value=len(predictor.df)-1,
+                            value=0,
+                            help="Starting index of customers to process"
+                        )
+                    
+                    with col2:
+                        end_idx = st.number_input(
+                            "End Index:",
+                            min_value=1,
+                            max_value=len(predictor.df),
+                            value=min(1000, len(predictor.df)),
+                            help="Ending index of customers to process"
+                        )
+                    
+                    st.write(f"**Processing:** Customers {start_idx} to {end_idx} ({end_idx - start_idx} total)")
                 else:
-                    st.session_state.batch_results = batch_results
-                    st.success(f"✅ Batch prediction completed! Processed {len(batch_results):,} customers.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Display batch results if available
-        if hasattr(st.session_state, 'batch_results') and st.session_state.batch_results is not None:
-            batch_results = st.session_state.batch_results
+                    st.write(f"**Processing:** Full dataset ({len(predictor.df):,} customers)")
+                    start_idx = 0
+                    end_idx = len(predictor.df)
+                
+                # Run batch prediction
+                if st.button("🚀 Run Batch Prediction", type="primary", use_container_width=True):
+                    with st.spinner("Running batch predictions... This may take a few minutes."):
+                        batch_results, error = predictor.predict_batch(start_idx=start_idx, end_idx=end_idx)
+                        
+                        if error:
+                            st.error(f"Error in batch prediction: {error}")
+                        else:
+                            st.session_state.batch_results = batch_results
+                            st.success(f"✅ Batch prediction completed! Processed {len(batch_results):,} customers.")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            st.markdown("---")
-            st.subheader("📋 Batch Prediction Results")
-            
-            # Display statistics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Customers Processed", f"{len(batch_results):,}")
-            
-            with col2:
-                top_channel = batch_results['1_Preferred_Channel'].value_counts().index[0]
-                st.metric("Most Common Top Channel", top_channel)
-            
-            with col3:
-                unique_customers = batch_results['Customer_ID'].nunique()
-                st.metric("Unique Customers", f"{unique_customers:,}")
-            
-            with col4:
-                channels_covered = batch_results['1_Preferred_Channel'].nunique()
-                st.metric("Channels Used", channels_covered)
-            
-            # Filter options for first preferred channel
-            st.write("**Filter by First Preferred Channel:**")
-            all_channels = ['All'] + sorted(batch_results['1_Preferred_Channel'].unique().tolist())
-            selected_channel = st.selectbox("Select channel to filter:", all_channels)
-            
-            if selected_channel != 'All':
-                filtered_results = batch_results[batch_results['1_Preferred_Channel'] == selected_channel]
-                st.write(f"Showing {len(filtered_results)} customers with {selected_channel} as first preference")
-            else:
-                filtered_results = batch_results
-            
-            # Display sample of results
-            st.write("**Prediction Results:**")
-            st.dataframe(filtered_results.head(20), use_container_width=True)
-            
-            # Download buttons
-            st.markdown("---")
-            st.subheader("📥 Download Results")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Complete results download
-                csv_complete = convert_df_to_csv(filtered_results)
-                st.download_button(
-                    label="📄 Download Filtered Results (CSV)",
-                    data=csv_complete,
-                    file_name=f"channel_predictions_{selected_channel.lower()}_{len(filtered_results)}_customers.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            with col2:
-                # All results download
-                csv_all = convert_df_to_csv(batch_results)
-                st.download_button(
-                    label="📊 Download All Results (CSV)",
-                    data=csv_all,
-                    file_name=f"channel_predictions_all_{len(batch_results)}_customers.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # Visualize channel distribution
-            st.markdown("---")
-            st.subheader("📈 Channel Distribution")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Bar chart of top channel distribution
-                channel_dist = batch_results['1_Preferred_Channel'].value_counts()
-                fig_bar = px.bar(
-                    x=channel_dist.values,
-                    y=channel_dist.index,
-                    orientation='h',
-                    title="Top Preferred Channels",
-                    labels={'x': 'Number of Customers', 'y': 'Channel'},
-                    color=channel_dist.values,
-                    color_continuous_scale=['#0F4C99', '#00B04F']
-                )
-                fig_bar.update_layout(
-                    height=400,
-                    showlegend=False,
-                    plot_bgcolor='white'
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
-            
-            with col2:
-                # Pie chart of channel distribution
-                fig_pie = px.pie(
-                    values=channel_dist.values,
-                    names=channel_dist.index,
-                    title="Channel Preference Distribution",
-                    color_discrete_sequence=['#0F4C99', '#00B04F', '#4A90E2', '#6B7280', '#9CA3AF', '#D1D5DB']
-                )
-                fig_pie.update_layout(height=400)
-                st.plotly_chart(fig_pie, use_container_width=True)
+            # Display batch results if available
+            if hasattr(st.session_state, 'batch_results') and st.session_state.batch_results is not None:
+                batch_results = st.session_state.batch_results
+                
+                st.markdown("---")
+                
+                # Results Section
+                with st.container():
+                    st.subheader("📋 Batch Prediction Results")
+                    
+                    # Display statistics
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Customers Processed", f"{len(batch_results):,}")
+                    
+                    with col2:
+                        top_channel = batch_results['1_Preferred_Channel'].value_counts().index[0]
+                        st.metric("Most Common Top Channel", top_channel)
+                    
+                    with col3:
+                        unique_customers = batch_results['Customer_ID'].nunique()
+                        st.metric("Unique Customers", f"{unique_customers:,}")
+                    
+                    with col4:
+                        channels_covered = batch_results['1_Preferred_Channel'].nunique()
+                        st.metric("Channels Used", channels_covered)
+                    
+                    # Filter options for first preferred channel
+                    with st.container():
+                        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                        st.write("**Filter by First Preferred Channel:**")
+                        all_channels = ['All'] + sorted(batch_results['1_Preferred_Channel'].unique().tolist())
+                        selected_channel = st.selectbox("Select channel to filter:", all_channels)
+                        
+                        if selected_channel != 'All':
+                            filtered_results = batch_results[batch_results['1_Preferred_Channel'] == selected_channel]
+                            st.write(f"Showing {len(filtered_results)} customers with {selected_channel} as first preference")
+                        else:
+                            filtered_results = batch_results
+                        
+                        # Display results
+                        st.write("**Prediction Results:**")
+                        st.dataframe(filtered_results.head(20), use_container_width=True)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Download Section
+                    with st.container():
+                        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                        st.subheader("📥 Download Results")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            # Filtered results download
+                            csv_filtered = convert_df_to_csv(filtered_results)
+                            st.download_button(
+                                label="📄 Download Filtered Results (CSV)",
+                                data=csv_filtered,
+                                file_name=f"channel_predictions_{selected_channel.lower()}_{len(filtered_results)}_customers.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        
+                        with col2:
+                            # All results download
+                            csv_all = convert_df_to_csv(batch_results)
+                            st.download_button(
+                                label="📊 Download All Results (CSV)",
+                                data=csv_all,
+                                file_name=f"channel_predictions_all_{len(batch_results)}_customers.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        st.markdown('</div>', unsafe_allow_html=True)
         
         # Back button
         if st.button("← Back to Prediction Type Selection"):
@@ -725,269 +729,322 @@ def main():
         # Get predictor from session state
         predictor = st.session_state.predictor
         
-        # Search and prediction section
         st.markdown("---")
         
-        # Create two columns for search and prediction button
-        search_col, predict_col = st.columns([3, 1])
+        # Search Section
+        with st.container():
+            st.subheader("🔍 Customer Search")
+            
+            # Create two columns for search and prediction button
+            search_col, predict_col = st.columns([3, 1])
+            
+            with search_col:
+                # Integrated search with advanced options
+                customer_id_input = st.text_input(
+                    "Search Customer ID:",
+                    value=st.session_state.get('selected_customer_id', ''),
+                    placeholder="Type any Customer ID (e.g., SCB251079598) or use advanced search below",
+                    help="Enter ANY Customer ID from the 100,000+ customers in the dataset"
+                )
+            
+            with predict_col:
+                st.write("")  # Spacer for alignment
+                st.write("")  # Spacer for alignment
+                if st.button("🎯 Predict", type="primary", use_container_width=True):
+                    if customer_id_input:
+                        with st.spinner("Looking up customer and generating predictions..."):
+                            # Get customer data
+                            customer_data, error = predictor.get_customer_by_id(customer_id_input)
+                            
+                            if error:
+                                st.error(error)
+                            else:
+                                # Make predictions
+                                predictions = predictor.predict_single_customer(customer_data)
+                                insights = predictor.get_customer_insights(customer_data)
+                                
+                                # Store in session state
+                                st.session_state.predictions = predictions
+                                st.session_state.customer_insights = insights
+                                st.session_state.current_customer_id = customer_id_input
+                                
+                                st.success(f"✅ Predictions generated for Customer {customer_id_input}!")
+                    else:
+                        st.warning("Please enter a Customer ID")
+            
+            # Quick validation
+            if customer_id_input and predictor.df is not None:
+                if customer_id_input in predictor.df['Customer_id'].values:
+                    st.success(f"✅ Customer {customer_id_input} found in database!")
+                elif len(customer_id_input) > 3:
+                    st.warning(f"⚠️ Customer {customer_id_input} not found. Check spelling or search above.")
         
-        with search_col:
-            # Integrated search with advanced options
-            customer_id_input = st.text_input(
-                "🔍 Search Customer ID:",
-                value=st.session_state.get('selected_customer_id', ''),
-                placeholder="Type any Customer ID (e.g., SCB251079598) or use advanced search below",
-                help="Enter ANY Customer ID from the 100,000+ customers in the dataset"
-            )
-        
-        with predict_col:
-            st.write("")  # Spacer for alignment
-            st.write("")  # Spacer for alignment
-            if st.button("🎯 Predict", type="primary", use_container_width=True):
-                if customer_id_input:
-                    with st.spinner("Looking up customer and generating predictions..."):
-                        # Get customer data
-                        customer_data, error = predictor.get_customer_by_id(customer_id_input)
+        # Advanced Search Section
+        with st.container():
+            with st.expander("🔍 Advanced Search Options", expanded=True):
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Filter by segment with descriptions
+                    if 'Customer_Segment' in predictor.df.columns:
+                        segment_options = ['All'] 
+                        # Add segment options with descriptions
+                        if 'Young' in predictor.df['Customer_Segment'].unique():
+                            segment_options.append('Young (18-30 years)')
+                        if 'Senior' in predictor.df['Customer_Segment'].unique():
+                            segment_options.append('Senior (60+ years)')
+                        if 'Traditional' in predictor.df['Customer_Segment'].unique():
+                            segment_options.append('Traditional (low digital engagement)')
+                        if 'High Value Digital' in predictor.df['Customer_Segment'].unique():
+                            segment_options.append('High Value Digital (digital savvy)')
+                        if 'Standard' in predictor.df['Customer_Segment'].unique():
+                            segment_options.append('Standard (default category)')
                         
-                        if error:
-                            st.error(error)
-                        else:
-                            # Make predictions
-                            predictions = predictor.predict_single_customer(customer_data)
-                            insights = predictor.get_customer_insights(customer_data)
-                            
-                            # Store in session state
-                            st.session_state.predictions = predictions
-                            st.session_state.customer_insights = insights
-                            st.session_state.current_customer_id = customer_id_input
-                            
-                            st.success(f"✅ Predictions generated for Customer {customer_id_input}!")
-                else:
-                    st.warning("Please enter a Customer ID")
-        
-        # Advanced search options
-        with st.expander("🔍 Advanced Search Options", expanded=True):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Filter by segment with descriptions
-                if 'Customer_Segment' in predictor.df.columns:
-                    segment_options = ['All'] 
-                    # Add segment options with descriptions
-                    if 'Young' in predictor.df['Customer_Segment'].unique():
-                        segment_options.append('Young (18-30 years)')
-                    if 'Senior' in predictor.df['Customer_Segment'].unique():
-                        segment_options.append('Senior (60+ years)')
-                    if 'Traditional' in predictor.df['Customer_Segment'].unique():
-                        segment_options.append('Traditional (low digital engagement)')
-                    if 'High Value Digital' in predictor.df['Customer_Segment'].unique():
-                        segment_options.append('High Value Digital (digital savvy)')
-                    if 'Standard' in predictor.df['Customer_Segment'].unique():
-                        segment_options.append('Standard (default category)')
-                    
-                    # Add any other segments without descriptions
-                    other_segments = [seg for seg in predictor.df['Customer_Segment'].unique() 
-                                    if seg not in ['Young', 'Senior', 'Traditional', 'High Value Digital', 'Standard']]
-                    segment_options.extend(other_segments)
-                    
-                    selected_segment = st.selectbox("Filter by Segment:", segment_options)
-                else:
-                    selected_segment = 'All'
-            
-            with col2:
-                # Search by ID pattern
-                id_pattern = st.text_input("Customer ID Pattern:", placeholder="e.g., SCB2*, *598, SCB*")
-            
-            # Search button
-            if st.button("🔍 Search Customers", use_container_width=True):
-                # Apply filters and get matching customers
-                filtered_df = predictor.df.copy()
+                        # Add any other segments without descriptions
+                        other_segments = [seg for seg in predictor.df['Customer_Segment'].unique() 
+                                        if seg not in ['Young', 'Senior', 'Traditional', 'High Value Digital', 'Standard']]
+                        segment_options.extend(other_segments)
+                        
+                        selected_segment = st.selectbox("Filter by Segment:", segment_options)
+                    else:
+                        selected_segment = 'All'
                 
-                if selected_segment != 'All':
-                    # Extract segment name without description
-                    segment_name = selected_segment.split(' (')[0]
-                    filtered_df = filtered_df[filtered_df['Customer_Segment'] == segment_name]
+                with col2:
+                    # Search by ID pattern
+                    id_pattern = st.text_input("Customer ID Pattern:", placeholder="e.g., SCB2*, *598, SCB*")
                 
-                if id_pattern:
-                    # Convert pattern to regex
-                    regex_pattern = id_pattern.replace('*', '.*')
-                    filtered_df = filtered_df[
-                        filtered_df['Customer_id'].str.contains(regex_pattern, case=False, na=False)
-                    ]
-                
-                if len(filtered_df) > 0:
-                    st.session_state.search_results = filtered_df['Customer_id'].head(30).tolist()
-                    st.success(f"Found {len(filtered_df)} customers matching criteria")
-                else:
-                    st.warning("No customers found with these criteria")
-            
-            # Display search results if available
-            if hasattr(st.session_state, 'search_results') and st.session_state.search_results:
-                st.write("**Click any Customer ID below to select:**")
-                
-                # Display in a grid
-                cols = st.columns(6)
-                for i, customer_id in enumerate(st.session_state.search_results):
-                    with cols[i % 6]:
-                        if st.button(customer_id, key=f"search_btn_{customer_id}", use_container_width=True):
-                            st.session_state.selected_customer_id = customer_id
-                            st.rerun()
-        
-        # Quick validation
-        if customer_id_input and predictor.df is not None:
-            if customer_id_input in predictor.df['Customer_id'].values:
-                st.success(f"✅ Customer {customer_id_input} found in database!")
-            elif len(customer_id_input) > 3:
-                st.warning(f"⚠️ Customer {customer_id_input} not found. Check spelling or search above.")
-        
-        # Show dataset statistics
-        st.info(f"📊 **Dataset Info:** {len(predictor.df):,} total customers available for prediction")
-        
-        # Prediction results container
-        if hasattr(st.session_state, 'predictions') and st.session_state.predictions:
-            st.markdown("---")
-            st.subheader("📊 Prediction Results")
-            
-            # Display current model and customer
-            st.info(f"🤖 Model: {st.session_state.current_model} | 👤 Customer: {st.session_state.current_customer_id}")
-            
-            # Customer Profile Details
-            if hasattr(st.session_state, 'customer_insights'):
-                st.markdown('<div class="clean-card">', unsafe_allow_html=True)
-                st.subheader("👤 Customer Profile")
-                
-                insights = st.session_state.customer_insights
-                
-                # Organize insights into categories (excluding channels)
-                basic_info = {}
-                financial_info = {}
-                digital_info = {}
-                
-                for key, value in insights.items():
-                    if key in ['Customer ID', 'Estimated Age', 'Location', 'Language Preference', 'Customer Segment']:
-                        basic_info[key] = value
-                    elif 'Loan' in key or 'Credit' in key or 'Balance' in key or 'Due' in key or 'Tenure' in key or 'Income' in key:
-                        financial_info[key] = value
-                    elif 'Digital' in key or 'App' in key or 'Online' in key or 'Smartphone' in key:
-                        digital_info[key] = value
-                
-                # Display in organized columns
+                # Search and navigation buttons
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    st.write("**Basic Information**")
-                    for key, value in basic_info.items():
-                        st.write(f"**{key}:** {value}")
+                    if st.button("🔍 Search Customers", use_container_width=True):
+                        # Apply filters and get matching customers
+                        filtered_df = predictor.df.copy()
+                        
+                        if selected_segment != 'All':
+                            # Extract segment name without description
+                            segment_name = selected_segment.split(' (')[0]
+                            filtered_df = filtered_df[filtered_df['Customer_Segment'] == segment_name]
+                        
+                        if id_pattern:
+                            # Convert pattern to regex
+                            regex_pattern = id_pattern.replace('*', '.*')
+                            filtered_df = filtered_df[
+                                filtered_df['Customer_id'].str.contains(regex_pattern, case=False, na=False)
+                            ]
+                        
+                        if len(filtered_df) > 0:
+                            st.session_state.search_results = filtered_df
+                            st.session_state.current_search_offset = 0
+                            st.session_state.search_customers = filtered_df['Customer_id'].iloc[0:30].tolist()
+                            st.success(f"Found {len(filtered_df)} customers matching criteria")
+                        else:
+                            st.warning("No customers found with these criteria")
+                            st.session_state.search_results = None
                 
                 with col2:
-                    st.write("**Financial Information**")
-                    for key, value in financial_info.items():
-                        st.write(f"**{key}:** {value}")
+                    if st.button("🎲 Random 30 Customers", use_container_width=True):
+                        st.session_state.search_results = predictor.df
+                        st.session_state.current_search_offset = 0
+                        st.session_state.search_customers = predictor.df['Customer_id'].sample(30).tolist()
+                        st.success("Displaying 30 random customers")
                 
                 with col3:
-                    st.write("**Digital Profile**")
-                    for key, value in digital_info.items():
-                        st.write(f"**{key}:** {value}")
+                    if hasattr(st.session_state, 'search_results') and st.session_state.search_results is not None:
+                        if st.button("➡️ Next 30 Customers", use_container_width=True):
+                            current_offset = st.session_state.current_search_offset + 30
+                            if current_offset < len(st.session_state.search_results):
+                                st.session_state.current_search_offset = current_offset
+                                st.session_state.search_customers = st.session_state.search_results['Customer_id'].iloc[current_offset:current_offset+30].tolist()
+                                st.success(f"Showing next 30 customers ({current_offset} to {current_offset+30})")
+                            else:
+                                st.warning("No more customers to display")
+                
+                # Display search results if available
+                if hasattr(st.session_state, 'search_customers') and st.session_state.search_customers:
+                    st.write("**Click any Customer ID below to select:**")
+                    
+                    # Display in a grid
+                    cols = st.columns(6)
+                    for i, customer_id in enumerate(st.session_state.search_customers):
+                        with cols[i % 6]:
+                            if st.button(customer_id, key=f"search_btn_{customer_id}", use_container_width=True):
+                                st.session_state.selected_customer_id = customer_id
+                                st.rerun()
                 
                 st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Primary Recommendation and Business Action Plan
-            predictions = st.session_state.predictions
-            top_channel = predictions[0]['channel']
-            top_score = predictions[0]['score']
-            
-            # Primary Recommendation
-            st.markdown('<div class="recommendation-card">', unsafe_allow_html=True)
-            st.subheader("🎯 Primary Recommendation")
-            st.write(f"**Contact via:** {top_channel}")
-            st.write(f"**Confidence Score:** {top_score:.4f}")
+        
+        # Dataset Info Section
+        with st.container():
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.info(f"📊 **Dataset Information:** {len(predictor.df):,} total customers available for prediction")
             st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Prediction Results Section
+        if hasattr(st.session_state, 'predictions') and st.session_state.predictions:
+            st.markdown("---")
             
-            # Business Action Plan
-            st.markdown('<div class="clean-card">', unsafe_allow_html=True)
-            st.subheader("💼 Business Action Plan")
-            
-            st.write("**Recommended Contact Strategy:**")
-            st.write(f"1. **Start with {predictions[0]['channel']}** - Highest success probability (Score: {predictions[0]['score']:.3f})")
-            st.write(f"2. **Follow up with {predictions[1]['channel']}** - Second best option (Score: {predictions[1]['score']:.3f})")
-            st.write(f"3. **Use {predictions[2]['channel']}** - Alternative if needed (Score: {predictions[2]['score']:.3f})")
-            
-            st.write("**Channel Effectiveness:**")
-            for i, pred in enumerate(predictions[:3]):
-                effectiveness = "High" if pred['score'] > 0 else "Medium" if pred['score'] > -1 else "Low"
-                st.write(f"• **{pred['channel']}**: {effectiveness} effectiveness")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Channel Preference Ranking in Horizontal Tiles
-            st.subheader("📈 Channel Preference Ranking")
-            
-            # Create horizontal tiles
-            st.markdown('<div class="horizontal-tile-container">', unsafe_allow_html=True)
-            
-            for i, pred in enumerate(predictions):
-                rank_class = "tile-rank-1" if i == 0 else "tile-rank-2" if i == 1 else "tile-rank-3" if i == 2 else "tile-rank-other"
+            with st.container():
+                st.subheader("📊 Prediction Results")
                 
-                rank_badge = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}"
+                # Display current model and customer
+                st.info(f"🤖 Model: {st.session_state.current_model} | 👤 Customer: {st.session_state.current_customer_id}")
                 
-                st.markdown(f"""
-                <div class="channel-tile {rank_class}">
-                    <div style="font-size: 1.5rem;">{rank_badge}</div>
-                    <div>{pred['channel']}</div>
-                    <div style="font-size: 0.8rem; margin-top: 5px;">{pred['score']:.3f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Score Visualization
-            st.subheader("📊 Score Visualization")
-            
-            # Create horizontal bar chart
-            channels = [pred['channel'] for pred in predictions]
-            scores = [pred['score'] for pred in predictions]
-            
-            fig = px.bar(
-                x=scores, 
-                y=channels, 
-                orientation='h',
-                title="Channel Preference Scores",
-                labels={'x': 'Prediction Score', 'y': 'Communication Channel'},
-                color=scores,
-                color_continuous_scale=['#0F4C99', '#00B04F'],
-                text=[f"{score:.3f}" for score in scores]
-            )
-            
-            fig.update_layout(
-                height=400,
-                yaxis={'categoryorder': 'total ascending'},
-                showlegend=False,
-                plot_bgcolor='white',
-                font=dict(color='#1F2937')
-            )
-            
-            fig.update_traces(textposition='outside')
-            
-            st.plotly_chart(fig, use_container_width=True)
+                # Customer Profile Details
+                with st.container():
+                    st.markdown('<div class="clean-card">', unsafe_allow_html=True)
+                    st.subheader("👤 Customer Profile")
+                    
+                    insights = st.session_state.customer_insights
+                    
+                    # Organize insights into categories (excluding channels)
+                    basic_info = {}
+                    financial_info = {}
+                    digital_info = {}
+                    
+                    for key, value in insights.items():
+                        if key in ['Customer ID', 'Estimated Age', 'Location', 'Language Preference', 'Customer Segment']:
+                            basic_info[key] = value
+                        elif 'Loan' in key or 'Credit' in key or 'Balance' in key or 'Due' in key or 'Tenure' in key or 'Income' in key:
+                            financial_info[key] = value
+                        elif 'Digital' in key or 'App' in key or 'Online' in key or 'Smartphone' in key:
+                            digital_info[key] = value
+                    
+                    # Display in organized columns
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.write("**Basic Information**")
+                        for key, value in basic_info.items():
+                            st.write(f"**{key}:** {value}")
+                    
+                    with col2:
+                        st.write("**Financial Information**")
+                        for key, value in financial_info.items():
+                            st.write(f"**{key}:** {value}")
+                    
+                    with col3:
+                        st.write("**Digital Profile**")
+                        for key, value in digital_info.items():
+                            st.write(f"**{key}:** {value}")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Primary Recommendation
+                predictions = st.session_state.predictions
+                top_channel = predictions[0]['channel']
+                top_score = predictions[0]['score']
+                
+                with st.container():
+                    st.markdown('<div class="recommendation-card">', unsafe_allow_html=True)
+                    st.subheader("🎯 Primary Recommendation")
+                    st.write(f"**Contact via:** {top_channel}")
+                    st.write(f"**Confidence Score:** {top_score:.4f}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Business Action Plan
+                with st.container():
+                    st.markdown('<div class="clean-card">', unsafe_allow_html=True)
+                    st.subheader("💼 Business Action Plan")
+                    
+                    st.write("**Recommended Contact Strategy:**")
+                    st.write(f"1. **Start with {predictions[0]['channel']}** - Highest success probability (Score: {predictions[0]['score']:.3f})")
+                    st.write(f"2. **Follow up with {predictions[1]['channel']}** - Second best option (Score: {predictions[1]['score']:.3f})")
+                    st.write(f"3. **Use {predictions[2]['channel']}** - Alternative if needed (Score: {predictions[2]['score']:.3f})")
+                    
+                    st.write("**Channel Effectiveness:**")
+                    for i, pred in enumerate(predictions[:3]):
+                        effectiveness = "High" if pred['score'] > 0 else "Medium" if pred['score'] > -1 else "Low"
+                        st.write(f"• **{pred['channel']}**: {effectiveness} effectiveness")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Channel Preference Ranking
+                with st.container():
+                    st.subheader("📈 Channel Preference Ranking")
+                    
+                    # Create horizontal tiles
+                    st.markdown('<div class="horizontal-tile-container">', unsafe_allow_html=True)
+                    
+                    for i, pred in enumerate(predictions):
+                        rank_class = "tile-rank-1" if i == 0 else "tile-rank-2" if i == 1 else "tile-rank-3" if i == 2 else "tile-rank-other"
+                        
+                        rank_badge = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}"
+                        
+                        st.markdown(f"""
+                        <div class="channel-tile {rank_class}">
+                            <div style="font-size: 1.5rem;">{rank_badge}</div>
+                            <div>{pred['channel']}</div>
+                            <div style="font-size: 0.8rem; margin-top: 5px;">{pred['score']:.3f}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Score Visualization
+                with st.container():
+                    st.subheader("📊 Score Visualization")
+                    
+                    # Create horizontal bar chart
+                    channels = [pred['channel'] for pred in predictions]
+                    scores = [pred['score'] for pred in predictions]
+                    
+                    fig = px.bar(
+                        x=scores, 
+                        y=channels, 
+                        orientation='h',
+                        title="Channel Preference Scores",
+                        labels={'x': 'Prediction Score', 'y': 'Communication Channel'},
+                        color=scores,
+                        color_continuous_scale=['#0F4C99', '#00B04F'],
+                        text=[f"{score:.3f}" for score in scores]
+                    )
+                    
+                    fig.update_layout(
+                        height=400,
+                        yaxis={'categoryorder': 'total ascending'},
+                        showlegend=False,
+                        plot_bgcolor='white',
+                        font=dict(color='#1F2937')
+                    )
+                    
+                    fig.update_traces(textposition='outside')
+                    
+                    st.plotly_chart(fig, use_container_width=True)
     
-    # Footer with Standard Chartered logo
+    # Footer with Standard Chartered logo and text
     st.markdown("---")
+    
+    # Footer Section
+    st.markdown("""
+    <div class="footer">
+        <div class="footer-logo">
+    """, unsafe_allow_html=True)
     
     # Try to display SVG logo in footer
     try:
-        st.image("logo.svg", width=200)
+        st.image("logo.svg", width=150)
     except:
-        # Fallback footer
+        # Fallback logo text
         st.markdown("""
-        <div style='text-align: center; padding: 2rem; margin-top: 2rem;'>
-            <div style='color: #0F4C99; font-size: 1.1rem; font-weight: bold; margin-bottom: 0.5rem;'>
-                Standard Chartered Bank
-            </div>
-            <div style='color: #6B7280; font-size: 0.9rem;'>
-                AI-Powered Channel Prediction System
-            </div>
+        <div style='color: white; font-size: 1.5rem; font-weight: bold; margin-bottom: 1rem;'>
+            Standard Chartered Bank
         </div>
         """, unsafe_allow_html=True)
+    
+    st.markdown("""
+        </div>
+        <div class="footer-text">
+            <p><strong>AI-Powered Channel Prediction System</strong></p>
+            <p>Optimizing customer communication through advanced machine learning</p>
+            <p>Powered by LightGBM, XGBoost & Random Forest algorithms</p>
+            <p style='margin-top: 1rem; font-size: 0.8rem; color: #B8E6B8;'>
+                © 2024 Standard Chartered Bank. All rights reserved.
+            </p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
