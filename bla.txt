@@ -1,14 +1,14 @@
 st.markdown(f"""
-        <div style='margin: 0.8rem 0; padding: 1.2rem; 
+        <div style='display: flex; justify-content: space-between; align-items: center; 
+                   padding: 1.2rem; margin: 0.8rem 0; 
                    background-color: #FFFFFF;
                    border: 2px solid {color}; border-radius: 10px;
-                   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);'>
-            <div style='display: flex; justify-content: space-between; align-items: center;'>
-                <div>
-                    <strong style='font-size: 1.2rem; color: {color};'>{rank_badge} {pred['channel']}</strong><br>
-                    <span style='color: #6B7280; font-size: 0.9rem;'>Score: {score:.4f}</span>
-                </div>
-                <div style='font-size: 1.5rem;'>{stars}</div>
+                   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+                   width: 100%; min-height: 120px;'>
+            <div>
+                <strong style='font-size: 1.2rem; color: {color};'>{rank_badge} {pred['channel']}</strong><br>
+                <span style='color: #6B7280; font-size: 0.9rem;'>Score: {score:.4f}</span>
             </div>
+            <div style='font-size: 1.5rem;'>{stars}</div>
         </div>
         """, unsafe_allow_html=True)
