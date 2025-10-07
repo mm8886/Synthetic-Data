@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import warnings
+import io
 warnings.filterwarnings('ignore')
 
 # Set page config
@@ -199,6 +200,24 @@ st.markdown("""
         background-color: #F3F4F6;
         color: #1F2937;
     }
+    
+    /* Batch prediction styling */
+    .batch-stats {
+        background: linear-gradient(135deg, #0F4C99 0%, #4A90E2 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+    }
+    
+    .download-btn {
+        background-color: #00B04F !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.5rem 1rem !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -322,6 +341,51 @@ class ChannelPredictor:
         channel_predictions.sort(key=lambda x: x['score'], reverse=True)
         
         return channel_predictions
+    
+    def predict_batch(self, sample_size=None):
+        """Predict channel preferences for all customers in batch"""
+        if self.df is None:
+            return None, "Customer data not loaded"
+        
+        # Use sample if specified, otherwise use full dataset
+        if sample_size and sample_size < len(self.df):
+            customers_to_predict = self.df.sample(sample_size)
+        else:
+            customers_to_predict = self.df
+        
+        results = []
+        
+        # Progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, (_, customer_row) in enumerate(customers_to_predict.iterrows()):
+            # Update progress
+            progress = (idx + 1) / len(customers_to_predict)
+            progress_bar.progress(progress)
+            status_text.text(f"Processing customer {idx + 1} of {len(customers_to_predict)}...")
+            
+            # Make prediction for this customer
+            predictions = self.predict_single_customer(customer_row.to_frame().T)
+            
+            # Extract channel preferences in order
+            channel_order = [pred['channel'] for pred in predictions]
+            
+            # Create result row
+            result_row = {
+                'Customer_ID': customer_row['Customer_id']
+            }
+            
+            # Add each channel preference
+            for i, channel in enumerate(channel_order, 1):
+                result_row[f'{i}_Preferred_Channel'] = channel
+            
+            results.append(result_row)
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        return pd.DataFrame(results), None
     
     def get_customer_insights(self, customer_data):
         """Get customer profile insights with proper z-score denormalization"""
@@ -453,6 +517,10 @@ class ChannelPredictor:
         
         return insights
 
+def convert_df_to_csv(df):
+    """Convert DataFrame to CSV for download"""
+    return df.to_csv(index=False).encode('utf-8')
+
 def main():
     # Clean main header without logo
     st.markdown('<h1 class="main-header">Channel Prediction System</h1>', unsafe_allow_html=True)
@@ -549,12 +617,164 @@ def main():
     # Handle batch prediction
     if hasattr(st.session_state, 'prediction_type') and st.session_state.prediction_type == "batch":
         st.markdown("---")
-        st.info("📊 Batch Prediction - Under Development")
-        st.warning("This feature is currently under development and will be available in the next release.")
+        st.subheader("📊 Batch Prediction")
         
-        if st.button("← Back to Individual Prediction"):
-            st.session_state.prediction_type = "individual"
+        # Get predictor from session state
+        predictor = st.session_state.predictor
+        
+        st.info("""
+        **Batch Prediction Features:**
+        - Predict channel preferences for all customers in the dataset
+        - Generate comprehensive channel ranking for each customer
+        - Download complete results or aggregated summaries
+        """)
+        
+        # Batch prediction options
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Prediction Scope**")
+            prediction_scope = st.radio(
+                "Select prediction scope:",
+                ["Full Dataset", "Sample Dataset"],
+                help="Full dataset may take longer to process"
+            )
+            
+            if prediction_scope == "Sample Dataset":
+                sample_size = st.slider(
+                    "Sample size:",
+                    min_value=100,
+                    max_value=min(5000, len(predictor.df)),
+                    value=1000,
+                    step=100
+                )
+            else:
+                sample_size = None
+        
+        with col2:
+            st.write("**Dataset Information**")
+            st.metric("Total Customers", f"{len(predictor.df):,}")
+            st.metric("Available Channels", len(predictor.channels))
+            st.metric("Current Model", st.session_state.current_model)
+        
+        # Run batch prediction
+        if st.button("🚀 Run Batch Prediction", type="primary", use_container_width=True):
+            with st.spinner("Running batch predictions... This may take a few minutes."):
+                batch_results, error = predictor.predict_batch(sample_size=sample_size)
+                
+                if error:
+                    st.error(f"Error in batch prediction: {error}")
+                else:
+                    st.session_state.batch_results = batch_results
+                    st.success(f"✅ Batch prediction completed! Processed {len(batch_results):,} customers.")
+        
+        # Display batch results if available
+        if hasattr(st.session_state, 'batch_results') and st.session_state.batch_results is not None:
+            batch_results = st.session_state.batch_results
+            
+            st.markdown("---")
+            st.subheader("📋 Batch Prediction Results")
+            
+            # Display statistics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Customers Processed", f"{len(batch_results):,}")
+            
+            with col2:
+                top_channel = batch_results['1_Preferred_Channel'].value_counts().index[0]
+                st.metric("Most Common Top Channel", top_channel)
+            
+            with col3:
+                unique_customers = batch_results['Customer_ID'].nunique()
+                st.metric("Unique Customers", f"{unique_customers:,}")
+            
+            with col4:
+                channels_covered = batch_results['1_Preferred_Channel'].nunique()
+                st.metric("Channels Used", channels_covered)
+            
+            # Display sample of results
+            st.write("**Sample of Prediction Results:**")
+            st.dataframe(batch_results.head(10), use_container_width=True)
+            
+            # Download buttons
+            st.markdown("---")
+            st.subheader("📥 Download Results")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Complete results download
+                csv_complete = convert_df_to_csv(batch_results)
+                st.download_button(
+                    label="📄 Download Complete Results (CSV)",
+                    data=csv_complete,
+                    file_name=f"channel_predictions_complete_{len(batch_results)}_customers.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            with col2:
+                # Aggregated results (first preferred channel counts)
+                channel_counts = batch_results['1_Preferred_Channel'].value_counts().reset_index()
+                channel_counts.columns = ['Preferred_Channel', 'Customer_Count']
+                channel_counts['Percentage'] = (channel_counts['Customer_Count'] / len(batch_results) * 100).round(2)
+                
+                csv_aggregated = convert_df_to_csv(channel_counts)
+                st.download_button(
+                    label="📊 Download Channel Distribution (CSV)",
+                    data=csv_aggregated,
+                    file_name="channel_distribution_summary.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            # Visualize channel distribution
+            st.markdown("---")
+            st.subheader("📈 Channel Distribution Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Bar chart of top channel distribution
+                channel_dist = batch_results['1_Preferred_Channel'].value_counts()
+                fig_bar = px.bar(
+                    x=channel_dist.values,
+                    y=channel_dist.index,
+                    orientation='h',
+                    title="Distribution of Top Preferred Channels",
+                    labels={'x': 'Number of Customers', 'y': 'Channel'},
+                    color=channel_dist.values,
+                    color_continuous_scale='Viridis'
+                )
+                fig_bar.update_layout(height=400)
+                st.plotly_chart(fig_bar, use_container_width=True)
+            
+            with col2:
+                # Pie chart of channel distribution
+                fig_pie = px.pie(
+                    values=channel_dist.values,
+                    names=channel_dist.index,
+                    title="Top Channel Preference Distribution",
+                    hole=0.3
+                )
+                fig_pie.update_layout(height=400)
+                st.plotly_chart(fig_pie, use_container_width=True)
+            
+            # Show detailed statistics
+            with st.expander("📊 Detailed Statistics"):
+                st.write("**Channel Preference Summary:**")
+                for i in range(1, 7):
+                    col_name = f'{i}_Preferred_Channel'
+                    if col_name in batch_results.columns:
+                        st.write(f"**{i}st Preferred Channel Distribution:**")
+                        st.dataframe(batch_results[col_name].value_counts().head(10), use_container_width=True)
+        
+        # Back button
+        if st.button("← Back to Prediction Type Selection"):
+            st.session_state.prediction_type = None
             st.rerun()
+        
         return
     
     # Individual prediction interface
