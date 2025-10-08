@@ -1,14 +1,35 @@
-st.markdown(f"""
-        <div style='display: flex; justify-content: space-between; align-items: center; 
-                   padding: 1.2rem; margin: 0.8rem 0; 
-                   background-color: #FFFFFF;
-                   border: 2px solid {color}; border-radius: 10px;
-                   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-                   width: 100%; min-height: 120px;'>
-            <div>
-                <strong style='font-size: 1.2rem; color: {color};'>{rank_badge} {pred['channel']}</strong><br>
-                <span style='color: #6B7280; font-size: 0.9rem;'>Score: {score:.4f}</span>
+# Primary Recommendation and Business Action Plan
+            predictions = st.session_state.predictions
+            top_channel = predictions[0]['channel']
+            top_score = predictions[0]['score']
+            
+            # Primary Recommendation
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <h4 style='color: #00B04F; margin-bottom: 1rem;'>🎯 Primary Recommendation</h4>
+                <div style='background-color: white; padding: 1rem; border-radius: 8px; border: 2px solid #00B04F;'>
+                    <p style='font-size: 1.1rem; font-weight: bold; color: #0F4C99; margin-bottom: 0.5rem;'>
+                        📞 Contact via: {top_channel}
+                    </p>
+                    <p style='color: #6B7280; margin: 0;'>Confidence Score: {top_score:.4f}</p>
+                </div>
             </div>
-            <div style='font-size: 1.5rem;'>{stars}</div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+            
+            # Business Action Plan (full content, no expander)
+            st.markdown("""
+            <div style='background-color: #F8FAFF; padding: 1.5rem; border-radius: 10px; border: 2px solid #0F4C99; margin: 1rem 0;'>
+                <h4 style='color: #0F4C99; margin-bottom: 1rem;'>💼 Business Action Plan</h4>
+            """, unsafe_allow_html=True)
+            
+            st.write("**Recommended Contact Strategy:**")
+            st.write(f"1. **Start with {predictions[0]['channel']}** - Highest success probability (Score: {predictions[0]['score']:.3f})")
+            st.write(f"2. **Follow up with {predictions[1]['channel']}** - Second best option (Score: {predictions[1]['score']:.3f})")
+            st.write(f"3. **Use {predictions[2]['channel']}** - Alternative if needed (Score: {predictions[2]['score']:.3f})")
+            
+            st.write("\n**Channel Effectiveness:**")
+            for i, pred in enumerate(predictions[:3]):
+                effectiveness = "High" if pred['score'] > 0 else "Medium" if pred['score'] > -1 else "Low"
+                st.write(f"• **{pred['channel']}**: {effectiveness} effectiveness")
+            
+            st.markdown("</div>", unsafe_allow_html=True)
