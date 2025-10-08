@@ -1,20 +1,20 @@
 with col4:
     # Calculate channel distribution counts
-    if hasattr(st.session_state, 'batch_results') and st.session_state.batch_results is not None:
-        channel_counts = batch_results['1_Preferred_Channel'].value_counts()
-        total_customers = len(batch_results)
-        
-        # Create a formatted string showing counts for all channels
-        channel_info = "**Channel Distribution:**\n"
-        for channel in ['SMS', 'Email', 'Call', 'WhatsApp', 'IVR', 'Field_Agent']:
-            count = channel_counts.get(channel, 0)
-            percentage = (count / total_customers * 100) if total_customers > 0 else 0
-            channel_info += f"• {channel}: {count:,} ({percentage:.1f}%)\n"
-        
-        st.metric(
-            "Channel Distribution", 
-            f"{len(batch_results):,} customers",
-            help=channel_info
-        )
-    else:
-        st.metric("Channel Distribution", "0 customers")
+    channel_counts = batch_results['1_Preferred_Channel'].value_counts()
+    
+    # Create a formatted string showing counts for each channel
+    channel_info = "**Channel Distribution:**\n\n"
+    for channel, count in channel_counts.items():
+        percentage = (count / len(batch_results)) * 100
+        channel_info += f"• **{channel}**: {count:,} ({percentage:.1f}%)\n"
+    
+    # Display the channel distribution information
+    st.metric(
+        "Channel Distribution", 
+        f"{len(batch_results):,} Total",
+        help=channel_info
+    )
+    
+    # Show detailed breakdown on expander
+    with st.expander("View Channel Breakdown"):
+        st.write(channel_info)
