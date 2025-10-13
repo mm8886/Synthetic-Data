@@ -1,13 +1,72 @@
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import dataiku
+from dataiku import spark as dkuspark
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+from utils import Utils
+from ConfigReader import ConfigReader
+from spark_lib import *
+from log import log
+from constants import *
 import time
 from datetime import date
+from pyspark.sql.types import *
 
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+import pyspark
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+print(f"PySpark Version: {pyspark.__version__}")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+spark = SparkSession \
+    .builder \
+    .appName("CDD Pipeline") \
+    .enableHiveSupport() \
+    .getOrCreate()
+spark.conf.set("spark.executor.cores", 4)
+spark.conf.set("spark.dynamicAllocation.minExecutors","1")
+spark.conf.set("spark.dynamicAllocation.maxExecutors","5")
+spark.conf.set("spark.executor.memory","10g")
+spark.conf.set("spark.driver.memory","10g")
+
+config = ConfigReader()
+utility = Utils()
+logger = log().get_logger()
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def getting_log_dimnsn(dataframe = None):
+    begin_time = time.time()
+    logger.info('Start of method - getting_log_dimnsn')
+    if(dataframe == None):
+        logger.info('No dataframe input passed to print dimensions')
+    else:
+        rc = dataframe.count()
+        cc = len(dataframe.columns)
+        logger.info('Dimension of Dataframe - ')
+        logger.info('Row Count - '+str(rc))
+        logger.info('Column Count - '+str(cc))
+        end_time = time.time()
+        logger.info('Time taken to log dimensions : '+str(end_time - begin_time))
+    logger.info('End of method - getting_log_dimnsn')
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+# Read recipe inputs
+trxn_all = utility.reading_data(spark, dataset_name="all_trxns_tmp_IB")
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+peer_grp = utility.reading_data(spark, dataset_name="peer_groups_IB")
+peer_grp = peer_grp.filter(F.col(config.get_country()) == config.get_country_code())
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+trxn_all = trxn_all.withColumn(config.get_all_trxn_cust_sgmt(), F.lit("IB"))
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
 def populate_peer_grouping(transactions):
     begin_time = time.time()
     logger.info("Start method - peer_grouping")
     
-    # Group by and calculate median
+    # Group by and calculate median using approximate percentile
     bb_group = transactions.groupBy(
         config.get_all_trxn_cust_sgmt(),
         config.get_prmry_prty_key(),
@@ -106,16 +165,16 @@ def populate_peer_grouping(transactions):
             df_to_return = df_to_return.union(df)
     else:
         # Create empty dataframe with required schema
-        schema = transactions.select(
-            config.get_all_trxn_cust_sgmt(),
-            config.get_prmry_prty_key()
-        ).schema
-        df_to_return = transactions.sparkSession.createDataFrame([], schema)
-        df_to_return = df_to_return.withColumn("C", F.lit(None).cast("double"))
-        df_to_return = df_to_return.withColumn("D", F.lit(None).cast("double"))
-        df_to_return = df_to_return.withColumn("C_perc", F.lit(0))
-        df_to_return = df_to_return.withColumn("D_perc", F.lit(0))
-        df_to_return = df_to_return.withColumn(config.get_peer_grp(), F.lit(""))
+        schema = StructType([
+            StructField(config.get_all_trxn_cust_sgmt(), StringType(), True),
+            StructField(config.get_prmry_prty_key(), StringType(), True),
+            StructField("C", DoubleType(), True),
+            StructField("D", DoubleType(), True),
+            StructField("C_perc", IntegerType(), True),
+            StructField("D_perc", IntegerType(), True),
+            StructField(config.get_peer_grp(), StringType(), True)
+        ])
+        df_to_return = spark.createDataFrame([], schema)
     
     # Add additional columns
     df_to_return = df_to_return.withColumn(
@@ -131,6 +190,37 @@ def populate_peer_grouping(transactions):
     
     logger.info("End method - peer_grouping")
     end_time = time.time()
-    logger.info("Time of completion: " + str(end_time - begin_time))
+    logger.info('Time of completion : '+str(end_time - begin_time))
     
     return df_to_return
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+def should_run_peer_grp(peer_grp_df):
+    if peer_grp_df.count() == 0:
+        return True
+    else:
+        # Get max model run date
+        max_date_row = peer_grp_df.agg(F.max(config.get_model_run_date()).alias("max_date")).collect()[0]
+        start_date = max_date_row["max_date"]
+        today_date = date.today()
+        
+        # Calculate month difference
+        res = (today_date.year - start_date.year) * 12 + (today_date.month - start_date.month)
+        if res > 2:
+            return True
+    return False
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+if should_run_peer_grp(peer_grp):
+    peer_grp_out = populate_peer_grouping(trxn_all)
+    getting_log_dimnsn(dataframe=peer_grp_out)
+    
+    # Union with existing peer groups
+    append_peer_grp = peer_grp_out.union(peer_grp)
+    
+    # Write recipe output
+    peer_group_ib = dataiku.Dataset("peer_group_latest_IB")
+    dkuspark.write_with_schema(peer_group_ib, append_peer_grp)
+
+# -------------------------------------------------------------------------------- NOTEBOOK-CELL: CODE
+stop_spark_session(spark)
