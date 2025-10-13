@@ -1,0 +1,14 @@
+spark = SparkSession \
+    .builder \
+    .appName("CDD Pipeline") \
+    .enableHiveSupport() \
+    .config("spark.executor.cores", "4") \
+    .config("spark.dynamicAllocation.minExecutors", "1") \
+    .config("spark.dynamicAllocation.maxExecutors", "5") \
+    .config("spark.executor.memory", "10g") \
+    .config("spark.driver.memory", "10g") \
+    .getOrCreate()
+
+config = ConfigReader()
+utility = Utils()
+logger = log().get_logger()
