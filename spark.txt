@@ -1,0 +1,136 @@
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+import time
+from datetime import date
+
+def populate_peer_grouping(transactions):
+    begin_time = time.time()
+    logger.info("Start method - peer_grouping")
+    
+    # Group by and calculate median
+    bb_group = transactions.groupBy(
+        config.get_all_trxn_cust_sgmt(),
+        config.get_prmry_prty_key(),
+        config.get_txn_drctn()
+    )
+    
+    bb_stat = bb_group.agg(
+        F.expr(f"percentile_approx({config.get_txn_amt()}, 0.5)").alias("median")
+    )
+    
+    # Pivot the data
+    bb_stat_pivot = bb_stat.groupBy(
+        config.get_all_trxn_cust_sgmt(),
+        config.get_prmry_prty_key()
+    ).pivot(
+        config.get_txn_drctn()
+    ).agg(F.first("median"))
+    
+    # Get unique segments
+    unique_segments = transactions.select(config.get_all_trxn_cust_sgmt()).distinct().rdd.flatMap(lambda x: x).collect()
+    
+    result_dfs = []
+    
+    for seg in unique_segments:
+        # Filter by segment
+        seg_df = bb_stat_pivot.filter(F.col(config.get_all_trxn_cust_sgmt()) == seg)
+        
+        # Calculate percentiles using window functions
+        window_spec_c = Window.partitionBy(config.get_all_trxn_cust_sgmt()).orderBy("C")
+        window_spec_d = Window.partitionBy(config.get_all_trxn_cust_sgmt()).orderBy("D")
+        
+        # Calculate percentile ranks
+        seg_df = seg_df.withColumn("p_rank_c", F.percent_rank().over(window_spec_c))
+        seg_df = seg_df.withColumn("p_rank_d", F.percent_rank().over(window_spec_d))
+        
+        # Assign percentile bins (qcut equivalent)
+        seg_df = seg_df.withColumn(
+            "C_perc",
+            F.when(F.col("C").isNull(), 0)
+            .when(F.col("p_rank_c") >= 0.95, 11)
+            .when(F.col("p_rank_c") >= 0.90, 10)
+            .when(F.col("p_rank_c") >= 0.80, 9)
+            .when(F.col("p_rank_c") >= 0.70, 8)
+            .when(F.col("p_rank_c") >= 0.60, 7)
+            .when(F.col("p_rank_c") >= 0.50, 6)
+            .when(F.col("p_rank_c") >= 0.40, 5)
+            .when(F.col("p_rank_c") >= 0.30, 4)
+            .when(F.col("p_rank_c") >= 0.20, 3)
+            .when(F.col("p_rank_c") >= 0.10, 2)
+            .otherwise(1)
+        )
+        
+        seg_df = seg_df.withColumn(
+            "D_perc",
+            F.when(F.col("D").isNull(), 0)
+            .when(F.col("p_rank_d") >= 0.95, 11)
+            .when(F.col("p_rank_d") >= 0.90, 10)
+            .when(F.col("p_rank_d") >= 0.80, 9)
+            .when(F.col("p_rank_d") >= 0.70, 8)
+            .when(F.col("p_rank_d") >= 0.60, 7)
+            .when(F.col("p_rank_d") >= 0.50, 6)
+            .when(F.col("p_rank_d") >= 0.40, 5)
+            .when(F.col("p_rank_d") >= 0.30, 4)
+            .when(F.col("p_rank_d") >= 0.20, 3)
+            .when(F.col("p_rank_d") >= 0.10, 2)
+            .otherwise(1)
+        )
+        
+        # Create peer group
+        seg_df = seg_df.withColumn(
+            config.get_peer_grp(),
+            F.concat(
+                F.lit(str(seg)), F.lit("_"),
+                F.col("C_perc").cast("string"), F.lit("_"),
+                F.col("D_perc").cast("string")
+            )
+        )
+        
+        # Select required columns
+        seg_df = seg_df.select(
+            config.get_all_trxn_cust_sgmt(),
+            config.get_prmry_prty_key(),
+            "C",
+            "D",
+            "C_perc",
+            "D_perc",
+            config.get_peer_grp()
+        )
+        
+        result_dfs.append(seg_df)
+    
+    # Combine all segments
+    if result_dfs:
+        df_to_return = result_dfs[0]
+        for df in result_dfs[1:]:
+            df_to_return = df_to_return.union(df)
+    else:
+        # Create empty dataframe with required schema
+        schema = transactions.select(
+            config.get_all_trxn_cust_sgmt(),
+            config.get_prmry_prty_key()
+        ).schema
+        df_to_return = transactions.sparkSession.createDataFrame([], schema)
+        df_to_return = df_to_return.withColumn("C", F.lit(None).cast("double"))
+        df_to_return = df_to_return.withColumn("D", F.lit(None).cast("double"))
+        df_to_return = df_to_return.withColumn("C_perc", F.lit(0))
+        df_to_return = df_to_return.withColumn("D_perc", F.lit(0))
+        df_to_return = df_to_return.withColumn(config.get_peer_grp(), F.lit(""))
+    
+    # Add additional columns
+    df_to_return = df_to_return.withColumn(
+        config.get_country(), 
+        F.lit(config.get_country_code())
+    ).withColumn(
+        config.get_model_run_date(),
+        F.lit(date.today())
+    )
+    
+    # Remove duplicates
+    df_to_return = df_to_return.dropDuplicates()
+    
+    logger.info("End method - peer_grouping")
+    end_time = time.time()
+    logger.info("Time of completion: " + str(end_time - begin_time))
+    
+    return df_to_return
