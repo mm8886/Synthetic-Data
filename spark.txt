@@ -2,113 +2,85 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import StandardScaler, VectorAssembler, StringIndexer, OneHotEncoder
+from pyspark.ml.feature import StandardScaler, VectorAssembler, StringIndexer, OneHotEncoder, Imputer
 from pyspark.ml.base import Transformer, Estimator
 from pyspark.ml.param.shared import HasInputCol, HasOutputCol, HasInputCols, HasOutputCols
+from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
+import pyspark.sql.functions as F
 from pyspark.sql import DataFrame
+from typing import List, Optional, Dict, Any
 import re
-from datetime import datetime
-from typing import List, Dict, Any
-import logging
+import os
 
-# Initialize Spark Session with optimized configuration
-spark = SparkSession.builder \
-    .appName("SingaporeLoanDataPipeline") \
-    .config("spark.sql.adaptive.enabled", "true") \
-    .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-    .config("spark.sql.inMemoryColumnarStorage.compressed", "true") \
-    .getOrCreate()
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-class DateFeatureExtractor(Transformer):
-    """Extract features from date columns using PySpark functions"""
+class SparkDataPipeline:
+    """Main PySpark Data Pipeline for Singapore Loan Data Processing"""
     
-    def __init__(self, date_columns: List[str]):
-        super(DateFeatureExtractor, self).__init__()
-        self.date_columns = date_columns
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        result_df = df
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.spark = SparkSession.builder \
+            .appName("SingaporeLoanDataPipeline") \
+            .config("spark.sql.adaptive.enabled", "true") \
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+            .getOrCreate()
         
-        for date_col in self.date_columns:
-            if date_col in df.columns:
-                result_df = (result_df
-                    .withColumn(date_col, to_date(col(date_col), "yyyy-MM-dd"))
-                    .withColumn(f"{date_col}_month", month(col(date_col)))
-                    .withColumn(f"{date_col}_dayofweek", dayofweek(col(date_col)))
-                    .withColumn(f"{date_col}_year", year(col(date_col)))
-                    .drop(date_col)
-                )
+        self.processed_data = None
+        self.pipeline_model = None
         
-        return result_df
-
-class IncomeBandEncoder(Transformer):
-    """Encode income bands to numerical values using PySpark"""
-    
-    def __init__(self):
-        super(IncomeBandEncoder, self).__init__()
-        self.income_mapping = {
-            '50,000 or Below': 0,
-            '50,000 to 100,000': 1,
-            '100,000 to 200,000': 2,
-            '200,000 to 300,000': 3,
-            '300,000 to 500,000': 4,
-            '500,000 or Above': 5
-        }
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        if 'Income_Band_SGD' in df.columns:
-            mapping_expr = create_map([lit(x) for x in sum(self.income_mapping.items(), ())])
-            return df.withColumn('Income_Band_SGD', mapping_expr[col('Income_Band_SGD')])
-        return df
-
-class BooleanConverter(Transformer):
-    """Convert various boolean representations to proper booleans using PySpark"""
-    
-    def __init__(self, boolean_columns: List[str]):
-        super(BooleanConverter, self).__init__()
-        self.boolean_columns = boolean_columns
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        result_df = df
+        # Define column categories
+        self.numeric_columns = [
+            'Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
+            'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
+            'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
+            'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
+            'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
+            'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
+            'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index'
+        ]
         
-        for col_name in self.boolean_columns:
-            if col_name in df.columns:
-                result_df = result_df.withColumn(
-                    col_name,
-                    when(lower(col(col_name)).isin(['true', '1', 'yes', 'y']), True)
-                    .when(lower(col(col_name)).isin(['false', '0', 'no', 'n']), False)
-                    .otherwise(None)
-                    .cast(BooleanType())
-                )
+        self.categorical_columns = [
+            'Product_Type', 'Payment_Frequency', 'Settlement_History',
+            'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
+            'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
+            'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
+            'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
+            'Gender', 'Occupation', 'Employeement_Type'
+        ]
         
-        return result_df
-
-class DigitalEngagementCalculator(Transformer):
-    """Calculate digital engagement score using PySpark"""
-    
-    def __init__(self):
-        super(DigitalEngagementCalculator, self).__init__()
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        engagement_metrics = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
+        self.date_columns = ['Installment_Due_Date', 'Last_Payment_Date']
         
-        if all(metric in df.columns for metric in engagement_metrics):
-            return df.withColumn(
-                'Digital_Engagement_Score',
-                (col('App_Login_Frequency') + col('UPI_Transactions') + col('Online_Banking_Activity')) / 3
-            )
-        return df
+        self.boolean_columns = [
+            'Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
+            'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data'
+        ]
 
-class AddressProcessor(Transformer):
-    """Extract city and pincode from address column using PySpark UDFs"""
+    def load_data(self) -> DataFrame:
+        """Load data from CSV file"""
+        print("Loading data...")
+        
+        try:
+            df = self.spark.read \
+                .option("header", "true") \
+                .option("inferSchema", "true") \
+                .csv(self.file_path)
+            
+            print(f"Successfully loaded {df.count():,} rows")
+            return df
+            
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            raise e
+
+class AddressProcessor(Transformer, HasInputCol, HasOutputCols, DefaultParamsReadable, DefaultParamsWritable):
+    """Extract city and pincode from address column"""
     
-    def __init__(self):
+    def __init__(self, inputCol: str = "Address", outputCols: List[str] = None):
         super(AddressProcessor, self).__init__()
+        self._set(inputCol=inputCol)
+        if outputCols is None:
+            outputCols = ["City", "Pincode"]
+        self._set(outputCols=outputCols)
+        
+        # Singapore regions
         self.singapore_regions = [
             'Tengah', 'Loyang', 'Pasir Ris', 'Tampines', 'Clementi', 'Jurong',
             'Queenstown', 'Woodlands', 'Serangoon', 'Bedok', 'Ang Mo Kio',
@@ -120,450 +92,479 @@ class AddressProcessor(Transformer):
             'Southern Islands', 'Straits View', 'Outram', 'Museum',
             'Dhoby Ghaut', 'Marina South', 'Marina East', 'Marina Centre'
         ]
-        
-        # Define UDFs for city and pincode extraction
-        self.extract_city_udf = udf(self._extract_city, StringType())
-        self.extract_pincode_udf = udf(self._extract_pincode, StringType())
-    
-    def _extract_city(self, address: str) -> str:
-        """Extract city name from address"""
-        if address is None:
+
+    def _extract_city_udf(self):
+        """UDF to extract city from address"""
+        def extract_city(address):
+            if address is None:
+                return "Unknown"
+            
+            address_str = str(address).lower()
+            for region in self.singapore_regions:
+                if region.lower() in address_str:
+                    return region
+            
+            # Fallback: extract word before Singapore
+            match = re.search(r'(\w+)\s+Singapore', address, re.IGNORECASE)
+            if match:
+                return match.group(1)
+            
             return "Unknown"
         
-        address_lower = address.lower()
-        for region in self.singapore_regions:
-            if region.lower() in address_lower:
-                return region
+        return udf(extract_city, StringType())
+
+    def _extract_pincode_udf(self):
+        """UDF to extract pincode from address"""
+        def extract_pincode(address):
+            if address is None:
+                return None
+            
+            pincode_pattern = r'\b(\d{6})\b'
+            match = re.search(pincode_pattern, str(address))
+            return match.group(1) if match else None
         
-        # Fallback: extract the word before the first occurrence of "Singapore"
-        match = re.search(r'(\w+)\s+Singapore', address, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        
-        return "Unknown"
-    
-    def _extract_pincode(self, address: str) -> str:
-        """Extract 6-digit Singapore pincode from address"""
-        if address is None:
-            return None
-        
-        pincode_pattern = r'\b(\d{6})\b'
-        match = re.search(pincode_pattern, address)
-        
-        if match:
-            return match.group(1)
-        
-        return None
-    
+        return udf(extract_pincode, StringType())
+
     def _transform(self, df: DataFrame) -> DataFrame:
-        if 'Address' in df.columns:
-            return (df
-                .withColumn('City', self.extract_city_udf(col('Address')))
-                .withColumn('Pincode', self.extract_pincode_udf(col('Address')))
-                .drop('Address')
-            )
+        input_col = self.getInputCol()
+        output_cols = self.getOutputCols()
+        
+        if input_col not in df.columns:
+            return df
+            
+        city_udf = self._extract_city_udf()
+        pincode_udf = self._extract_pincode_udf()
+        
+        df = df \
+            .withColumn(output_cols[0], city_udf(col(input_col))) \
+            .withColumn(output_cols[1], pincode_udf(col(input_col))) \
+            .drop(input_col)
+            
         return df
 
-class PhoneNumberProcessor(Transformer):
-    """Process and validate Singapore phone numbers using PySpark"""
+class PhoneNumberProcessor(Transformer, HasInputCols, HasOutputCols, DefaultParamsReadable, DefaultParamsWritable):
+    """Process and validate Singapore phone numbers"""
     
-    def __init__(self):
+    def __init__(self, inputCols: List[str] = None, outputCols: List[str] = None):
         super(PhoneNumberProcessor, self).__init__()
+        if inputCols is None:
+            inputCols = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
+        if outputCols is None:
+            outputCols = [f'{col}_Valid' for col in inputCols]
+        
+        self._set(inputCols=inputCols)
+        self._set(outputCols=outputCols)
         self.singapore_country_codes = ['+65', '65', '0065']
-        
-        # Define UDFs for phone processing
-        self.process_phone_udf = udf(self._process_phone_number, StringType())
-        self.validate_phone_udf = udf(self._validate_singapore_number, BooleanType())
-    
-    def _process_phone_number(self, phone: str) -> str:
-        """Remove country code and clean phone number"""
-        if phone is None or not isinstance(phone, str):
-            return None
-        
-        # Remove spaces, hyphens, parentheses
-        cleaned = re.sub(r'[\s\-\(\)]', '', str(phone))
-        
-        # Remove Singapore country codes
-        for country_code in self.singapore_country_codes:
-            if cleaned.startswith(country_code):
-                cleaned = cleaned[len(country_code):]
-                break
-        
-        return cleaned
-    
-    def _validate_singapore_number(self, phone: str) -> bool:
-        """Validate Singapore phone number format"""
-        if phone is None or not isinstance(phone, str):
-            return False
-        
-        # Singapore numbers should be 8 digits starting with 3, 6, 8, or 9
-        if re.match(r'^[3689]\d{7}$', phone):
-            return True
-        
-        return False
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-        result_df = df
-        
-        for col_name in phone_columns:
-            if col_name in df.columns:
-                result_df = (result_df
-                    .withColumn(col_name, self.process_phone_udf(col(col_name)))
-                    .withColumn(f'{col_name}_Valid', self.validate_phone_udf(col(col_name)))
-                )
-        
-        return result_df
 
-class EmailValidator(Transformer):
-    """Validate email addresses and extract domain information using PySpark"""
+    def _process_phone_udf(self):
+        """UDF to process phone numbers"""
+        def process_phone(phone):
+            if phone is None:
+                return None
+            
+            cleaned = re.sub(r'[\s\-\(\)]', '', str(phone))
+            
+            for country_code in self.singapore_country_codes:
+                if cleaned.startswith(country_code):
+                    cleaned = cleaned[len(country_code):]
+                    break
+            
+            return cleaned
+        
+        return udf(process_phone, StringType())
+
+    def _validate_phone_udf(self):
+        """UDF to validate Singapore phone numbers"""
+        def validate_phone(phone):
+            if phone is None:
+                return False
+            
+            phone_str = str(phone)
+            return bool(re.match(r'^[3689]\d{7}$', phone_str))
+        
+        return udf(validate_phone, BooleanType())
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        input_cols = self.getInputCols()
+        output_cols = self.getOutputCols()
+        
+        process_udf = self._process_phone_udf()
+        validate_udf = self._validate_phone_udf()
+        
+        for input_col, output_col in zip(input_cols, output_cols):
+            if input_col in df.columns:
+                df = df \
+                    .withColumn(input_col, process_udf(col(input_col))) \
+                    .withColumn(output_col, validate_udf(col(input_col)))
+        
+        return df
+
+class EmailValidator(Transformer, HasInputCol, HasOutputCols, DefaultParamsReadable, DefaultParamsWritable):
+    """Validate email addresses and extract domain information"""
     
-    def __init__(self):
+    def __init__(self, inputCol: str = "Email_ID", outputCols: List[str] = None):
         super(EmailValidator, self).__init__()
+        self._set(inputCol=inputCol)
+        if outputCols is None:
+            outputCols = ["Email_Valid_Format", "Email_Domain", "Email_Domain_Legitimate", "Email_Disposable"]
+        self._set(outputCols=outputCols)
         
-        # Define UDFs for email processing
-        self.validate_email_udf = udf(self._validate_email_format, BooleanType())
-        self.extract_domain_udf = udf(self._extract_domain, StringType())
-        self.is_legitimate_domain_udf = udf(self._is_legitimate_domain, BooleanType())
-        self.is_disposable_domain_udf = udf(self._is_disposable_domain, BooleanType())
-    
-    def _validate_email_format(self, email: str) -> bool:
-        """Validate basic email format"""
-        if email is None or not isinstance(email, str):
-            return False
-        
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        return bool(re.match(email_pattern, email))
-    
-    def _extract_domain(self, email: str) -> str:
-        """Extract domain from email address"""
-        if email is None or not isinstance(email, str) or '@' not in email:
-            return None
-        
-        return email.split('@')[1].lower()
-    
-    def _is_legitimate_domain(self, domain: str) -> bool:
-        """Check if domain is from a legitimate email provider"""
-        if domain is None:
-            return False
-        
-        legitimate_domains = [
+        self.legitimate_domains = [
             'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
             'icloud.com', 'protonmail.com', 'zoho.com', 'aol.com', 'mail.com',
             'gmail.com.sg', 'yahoo.com.sg', 'hotmail.com.sg', 'singnet.com.sg',
             'starhub.net.sg', 'pacific.net.sg'
         ]
         
-        return domain in legitimate_domains
-    
-    def _is_disposable_domain(self, domain: str) -> bool:
-        """Check if domain is from a disposable email service"""
-        if domain is None:
-            return False
-        
-        disposable_domains = [
+        self.disposable_domains = [
             'tempmail.com', '10minutemail.com', 'guerrillamail.com',
             'mailinator.com', 'yopmail.com', 'trashmail.com',
             'disposableemail.com', 'fakeinbox.com', 'temp-mail.org'
         ]
+
+    def _validate_email_udf(self):
+        """UDF to validate email format"""
+        def validate_email(email):
+            if email is None:
+                return False
+            
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            return bool(re.match(email_pattern, str(email)))
         
-        return domain in disposable_domains
-    
+        return udf(validate_email, BooleanType())
+
+    def _extract_domain_udf(self):
+        """UDF to extract domain from email"""
+        def extract_domain(email):
+            if email is None or '@' not in str(email):
+                return None
+            
+            return str(email).split('@')[1].lower()
+        
+        return udf(extract_domain, StringType())
+
+    def _is_legitimate_domain_udf(self):
+        """UDF to check if domain is legitimate"""
+        def is_legitimate(domain):
+            if domain is None:
+                return False
+            return domain in self.legitimate_domains
+        
+        return udf(is_legitimate, BooleanType())
+
+    def _is_disposable_domain_udf(self):
+        """UDF to check if domain is disposable"""
+        def is_disposable(domain):
+            if domain is None:
+                return False
+            return domain in self.disposable_domains
+        
+        return udf(is_disposable, BooleanType())
+
     def _transform(self, df: DataFrame) -> DataFrame:
-        if 'Email_ID' in df.columns:
-            return (df
-                .withColumn('Email_Valid_Format', self.validate_email_udf(col('Email_ID')))
-                .withColumn('Email_Domain', self.extract_domain_udf(col('Email_ID')))
-                .withColumn('Email_Domain_Legitimate', self.is_legitimate_domain_udf(col('Email_Domain')))
-                .withColumn('Email_Disposable', self.is_disposable_domain_udf(col('Email_Domain')))
-            )
+        input_col = self.getInputCol()
+        output_cols = self.getOutputCols()
+        
+        if input_col not in df.columns:
+            return df
+            
+        validate_udf = self._validate_email_udf()
+        domain_udf = self._extract_domain_udf()
+        legitimate_udf = self._is_legitimate_domain_udf()
+        disposable_udf = self._is_disposable_domain_udf()
+        
+        df = df \
+            .withColumn(output_cols[0], validate_udf(col(input_col))) \
+            .withColumn(output_cols[1], domain_udf(col(input_col))) \
+            .withColumn(output_cols[2], legitimate_udf(col(output_cols[1]))) \
+            .withColumn(output_cols[3], disposable_udf(col(output_cols[1])))
+        
         return df
 
-class DataLoader(Transformer):
-    """Load data from CSV file using PySpark"""
+class BooleanConverter(Transformer, HasInputCols, DefaultParamsReadable, DefaultParamsWritable):
+    """Convert various boolean representations to proper booleans"""
     
-    def __init__(self, file_path: str):
-        super(DataLoader, self).__init__()
-        self.file_path = file_path
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        logger.info("Loading data with PySpark...")
-        
-        try:
-            # PySpark automatically handles large files with partitioning
-            loaded_df = spark.read \
-                .option("header", "true") \
-                .option("inferSchema", "true") \
-                .csv(self.file_path)
-            
-            logger.info(f"Successfully loaded {loaded_df.count():,} rows")
-            return loaded_df
-            
-        except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            # Return empty DataFrame with expected structure
-            return spark.createDataFrame([], StructType([]))
+    def __init__(self, inputCols: List[str] = None):
+        super(BooleanConverter, self).__init__()
+        if inputCols is None:
+            inputCols = [
+                'Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
+                'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data'
+            ]
+        self._set(inputCols=inputCols)
 
-class MissingValueImputer(Transformer):
-    """Handle missing values for numeric and categorical columns"""
-    
-    def __init__(self, numeric_columns: List[str], categorical_columns: List[str]):
-        super(MissingValueImputer, self).__init__()
-        self.numeric_columns = numeric_columns
-        self.categorical_columns = categorical_columns
-    
-    def _transform(self, df: DataFrame) -> DataFrame:
-        result_df = df
+    def _convert_boolean_udf(self):
+        """UDF to convert various boolean representations"""
+        def convert_boolean(value):
+            if value is None:
+                return False
+            
+            str_val = str(value).lower()
+            if str_val in ['true', '1', 'yes']:
+                return True
+            elif str_val in ['false', '0', 'no']:
+                return False
+            else:
+                return bool(value)
         
-        # Impute numeric columns with median
-        for col_name in self.numeric_columns:
-            if col_name in df.columns:
-                # Calculate median
-                median_val = df.select(percentile_approx(col_name, 0.5)).collect()[0][0]
-                if median_val is not None:
-                    result_df = result_df.fillna({col_name: median_val})
-        
-        # Impute categorical columns with mode
-        for col_name in self.categorical_columns:
-            if col_name in df.columns:
-                # Calculate mode (most frequent value)
-                mode_df = df.groupBy(col_name).count().orderBy(col("count").desc()).limit(1)
-                mode_val = mode_df.collect()[0][0] if mode_df.count() > 0 else "Unknown"
-                result_df = result_df.fillna({col_name: mode_val})
-        
-        return result_df
+        return udf(convert_boolean, BooleanType())
 
-class PySparkDataPipeline:
-    """Main PySpark Data Pipeline for Singapore Loan Data Processing"""
-    
-    def __init__(self, file_path: str):
-        self.file_path = file_path
-        self.pipeline_stages = []
-        self.processed_data = None
-        self._build_pipeline()
-    
-    def _get_numeric_columns(self) -> List[str]:
-        """Define numeric columns for preprocessing"""
-        return ['Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
-                'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
-                'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
-                'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
-                'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
-                'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
-                'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
-                'Income_Band_SGD', 'Digital_Engagement_Score']
-    
-    def _get_categorical_columns(self) -> List[str]:
-        """Define categorical columns for preprocessing"""
-        return ['Product_Type', 'Payment_Frequency', 'Settlement_History',
-                'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
-                'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
-                'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
-                'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
-                'Gender', 'Occupation', 'Employeement_Type', 'City']
-    
-    def _get_boolean_columns(self) -> List[str]:
-        """Define boolean columns for conversion"""
-        return ['Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
-                'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data']
-    
-    def _get_date_columns(self) -> List[str]:
-        """Define date columns for processing"""
-        return ['Installment_Due_Date', 'Last_Payment_Date']
-    
-    def _build_pipeline(self):
-        """Build the PySpark ML pipeline"""
+    def _transform(self, df: DataFrame) -> DataFrame:
+        input_cols = self.getInputCols()
+        convert_udf = self._convert_boolean_udf()
         
-        # Get column lists
-        numeric_cols = self._get_numeric_columns()
-        categorical_cols = self._get_categorical_columns()
-        boolean_cols = self._get_boolean_columns()
-        date_cols = self._get_date_columns()
+        for col_name in input_cols:
+            if col_name in df.columns:
+                df = df.withColumn(col_name, convert_udf(col(col_name)))
         
-        # Build pipeline stages
-        self.pipeline_stages = [
-            # Step 1: Load data
-            DataLoader(self.file_path),
-            
-            # Step 2: Process address information
-            AddressProcessor(),
-            
-            # Step 3: Process phone numbers
-            PhoneNumberProcessor(),
-            
-            # Step 4: Validate email addresses
-            EmailValidator(),
-            
-            # Step 5: Convert boolean columns
-            BooleanConverter(boolean_cols),
-            
-            # Step 6: Encode income bands
-            IncomeBandEncoder(),
-            
-            # Step 7: Extract date features
-            DateFeatureExtractor(date_cols),
-            
-            # Step 8: Calculate digital engagement
-            DigitalEngagementCalculator(),
-            
-            # Step 9: Handle missing values
-            MissingValueImputer(numeric_cols, categorical_cols)
-        ]
+        return df
+
+class IncomeBandEncoder(Transformer, HasInputCol, HasOutputCol, DefaultParamsReadable, DefaultParamsWritable):
+    """Encode income bands to numerical values"""
     
-    def _add_feature_engineering(self, df: DataFrame) -> DataFrame:
-        """Add additional feature engineering steps"""
-        result_df = df
+    def __init__(self, inputCol: str = "Income_Band_SGD", outputCol: str = "Income_Band_Encoded"):
+        super(IncomeBandEncoder, self).__init__()
+        self._set(inputCol=inputCol)
+        self._set(outputCol=outputCol)
         
-        # Add feature: Debt to Income ratio (if possible)
-        if 'Loan_Amount_SGD' in df.columns and 'Income_Band_SGD' in df.columns:
-            # Convert income band to approximate income
-            income_approx = (col('Income_Band_SGD') * 50000 + 25000).alias('Approx_Income')
-            result_df = result_df.withColumn('Debt_to_Income_Ratio', 
-                                           col('Loan_Amount_SGD') / income_approx)
+        self.income_mapping = {
+            '50,000 or Below': 0,
+            '50,000 to 100,000': 1,
+            '100,000 to 200,000': 2,
+            '200,000 to 300,000': 3,
+            '300,000 to 500,000': 4,
+            '500,000 or Above': 5
+        }
+
+    def _encode_income_udf(self):
+        """UDF to encode income bands"""
+        def encode_income(income_band):
+            if income_band is None:
+                return None
+            return self.income_mapping.get(income_band, None)
         
-        # Add feature: Payment delinquency severity
-        if 'Day_Past_Due' in df.columns:
-            result_df = result_df.withColumn(
-                'Delinquency_Severity',
-                when(col('Day_Past_Due') <= 30, 'Mild')
-                .when(col('Day_Past_Due') <= 90, 'Moderate')
-                .otherwise('Severe')
+        return udf(encode_income, IntegerType())
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        input_col = self.getInputCol()
+        output_col = self.getOutputCol()
+        
+        if input_col not in df.columns:
+            return df
+            
+        encode_udf = self._encode_income_udf()
+        return df.withColumn(output_col, encode_udf(col(input_col)))
+
+class DateFeatureExtractor(Transformer, HasInputCols, DefaultParamsReadable, DefaultParamsWritable):
+    """Extract features from date columns"""
+    
+    def __init__(self, inputCols: List[str] = None):
+        super(DateFeatureExtractor, self).__init__()
+        if inputCols is None:
+            inputCols = ['Installment_Due_Date', 'Last_Payment_Date']
+        self._set(inputCols=inputCols)
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        input_cols = self.getInputCols()
+        
+        for col_name in input_cols:
+            if col_name in df.columns:
+                df = df \
+                    .withColumn(col_name, to_date(col(col_name), "yyyy-MM-dd")) \
+                    .withColumn(f"{col_name}_month", month(col(col_name))) \
+                    .withColumn(f"{col_name}_dayofweek", dayofweek(col(col_name))) \
+                    .withColumn(f"{col_name}_year", year(col(col_name))) \
+                    .drop(col_name)
+        
+        return df
+
+class DigitalEngagementCalculator(Transformer, DefaultParamsReadable, DefaultParamsWritable):
+    """Calculate digital engagement score"""
+    
+    def __init__(self):
+        super(DigitalEngagementCalculator, self).__init__()
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        engagement_metrics = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
+        
+        if all(metric in df.columns for metric in engagement_metrics):
+            df = df.withColumn(
+                'Digital_Engagement_Score',
+                (col('App_Login_Frequency') + col('UPI_Transactions') + col('Online_Banking_Activity')) / 3
             )
         
-        return result_df
+        return df
+
+class PySparkDataPipeline(SparkDataPipeline):
+    """Enhanced PySpark Data Pipeline with complete preprocessing"""
     
-    def _apply_standard_scaling(self, df: DataFrame) -> DataFrame:
-        """Apply standard scaling to numeric columns"""
-        numeric_cols = [col for col in self._get_numeric_columns() if col in df.columns]
+    def __init__(self, file_path: str):
+        super().__init__(file_path)
         
-        if not numeric_cols:
-            return df
+    def build_pipeline(self) -> Pipeline:
+        """Build the complete PySpark ML pipeline"""
         
-        # Use VectorAssembler and StandardScaler
-        assembler = VectorAssembler(inputCols=numeric_cols, outputCol="numeric_features")
-        scaler = StandardScaler(inputCol="numeric_features", outputCol="scaled_features")
+        # Define stages
+        stages = []
         
-        # Create temporary pipeline for scaling
-        scaling_pipeline = Pipeline(stages=[assembler, scaler])
-        scaling_model = scaling_pipeline.fit(df)
-        scaled_df = scaling_model.transform(df)
+        # 1. Address Processing
+        stages.append(AddressProcessor())
         
-        # Drop original numeric columns and temporary vectors
-        return scaled_df.drop(*numeric_cols).drop("numeric_features")
-    
-    def _apply_one_hot_encoding(self, df: DataFrame) -> DataFrame:
-        """Apply one-hot encoding to categorical columns"""
-        categorical_cols = [col for col in self._get_categorical_columns() if col in df.columns]
+        # 2. Phone Number Processing
+        stages.append(PhoneNumberProcessor())
         
-        if not categorical_cols:
-            return df
+        # 3. Email Validation
+        stages.append(EmailValidator())
         
-        encoding_stages = []
-        output_cols = []
+        # 4. Boolean Conversion
+        stages.append(BooleanConverter())
         
-        for col_name in categorical_cols:
-            # StringIndexer
-            indexer = StringIndexer(inputCol=col_name, outputCol=f"{col_name}_index")
-            # OneHotEncoder
-            encoder = OneHotEncoder(inputCol=f"{col_name}_index", outputCol=f"{col_name}_encoded")
-            
-            encoding_stages.extend([indexer, encoder])
-            output_cols.extend([f"{col_name}_index", f"{col_name}_encoded"])
+        # 5. Income Band Encoding
+        stages.append(IncomeBandEncoder())
         
-        # Apply encoding pipeline
-        encoding_pipeline = Pipeline(stages=encoding_stages)
-        encoding_model = encoding_pipeline.fit(df)
-        encoded_df = encoding_model.transform(df)
+        # 6. Date Feature Extraction
+        stages.append(DateFeatureExtractor())
         
-        # Drop original categorical columns and intermediate index columns
-        columns_to_drop = categorical_cols + [f"{col}_index" for col in categorical_cols]
-        return encoded_df.drop(*columns_to_drop)
-    
-    def fit_transform(self, save_path: str = None) -> DataFrame:
-        """Run the complete PySpark pipeline and return processed data"""
-        logger.info("=" * 50)
-        logger.info("RUNNING PYSPARK DATA PIPELINE")
-        logger.info("=" * 50)
+        # 7. Digital Engagement Calculation
+        stages.append(DigitalEngagementCalculator())
+        
+        # 8. Handle missing values for numeric columns
+        numeric_imputer = Imputer(
+            inputCols=[col for col in self.numeric_columns if col != 'Income_Band_SGD'],
+            outputCols=[f"{col}_imputed" for col in self.numeric_columns if col != 'Income_Band_SGD'],
+            strategy="median"
+        )
+        stages.append(numeric_imputer)
+        
+        # 9. Standard scaling for numeric columns
+        numeric_assembler = VectorAssembler(
+            inputCols=[f"{col}_imputed" for col in self.numeric_columns if col != 'Income_Band_SGD'],
+            outputCol="numeric_features"
+        )
+        stages.append(numeric_assembler)
+        
+        scaler = StandardScaler(
+            inputCol="numeric_features",
+            outputCol="scaled_numeric_features",
+            withStd=True,
+            withMean=True
+        )
+        stages.append(scaler)
+        
+        # 10. Categorical encoding
+        for categorical_col in self.categorical_columns:
+            if categorical_col in self.categorical_columns:  # Double check
+                indexer = StringIndexer(
+                    inputCol=categorical_col,
+                    outputCol=f"{categorical_col}_indexed",
+                    handleInvalid="keep"
+                )
+                encoder = OneHotEncoder(
+                    inputCol=f"{categorical_col}_indexed",
+                    outputCol=f"{categorical_col}_encoded"
+                )
+                stages.extend([indexer, encoder])
+        
+        return Pipeline(stages=stages)
+
+    def fit_transform(self, save_path: Optional[str] = None) -> DataFrame:
+        """Run the complete pipeline and return processed data"""
+        print("=" * 50)
+        print("RUNNING PYSPARK DATA PIPELINE")
+        print("=" * 50)
         
         try:
-            # Execute pipeline stages sequentially
-            current_df = None
+            # Load data
+            df = self.load_data()
+            original_count = df.count()
+            original_columns = len(df.columns)
             
-            for i, stage in enumerate(self.pipeline_stages):
-                logger.info(f"Applying stage {i+1}/{len(self.pipeline_stages)}: {stage.__class__.__name__}")
-                
-                if current_df is None:
-                    current_df = stage.transform(None)
-                else:
-                    current_df = stage.transform(current_df)
-                
-                # Cache intermediate results for performance
-                if i % 3 == 0:  # Cache every 3 stages
-                    current_df.cache()
-                    current_df.count()  # Force caching
-            
-            # Add feature engineering
-            logger.info("Applying feature engineering...")
-            current_df = self._add_feature_engineering(current_df)
+            print("Building and applying pipeline...")
+            pipeline = self.build_pipeline()
+            self.pipeline_model = pipeline.fit(df)
+            self.processed_data = self.pipeline_model.transform(df)
             
             # Remove duplicates
-            current_df = current_df.dropDuplicates()
-            
-            # Apply standard scaling
-            logger.info("Applying standard scaling...")
-            current_df = self._apply_standard_scaling(current_df)
-            
-            # Apply one-hot encoding
-            logger.info("Applying one-hot encoding...")
-            current_df = self._apply_one_hot_encoding(current_df)
-            
-            # Final cache and count
-            current_df.cache()
-            record_count = current_df.count()
-            
-            self.processed_data = current_df
+            self.processed_data = self.processed_data.dropDuplicates()
+            processed_count = self.processed_data.count()
             
             # Save if path provided
             if save_path:
                 self.save_processed_data(save_path)
             
-            logger.info("PySpark pipeline completed successfully!")
-            logger.info(f"Processed {record_count:,} rows")
+            print("Pipeline completed successfully!")
+            print(f"Original shape: ({original_count:,} rows, {original_columns} columns)")
+            print(f"Processed shape: ({processed_count:,} rows, {len(self.processed_data.columns)} columns)")
             
             return self.processed_data
             
         except Exception as e:
-            logger.error(f"Error in PySpark pipeline: {e}")
+            print(f"Error in pipeline: {e}")
             import traceback
             traceback.print_exc()
             return None
-    
+
     def save_processed_data(self, path: str):
         """Save the processed data"""
         if self.processed_data is not None:
-            # Use repartition for better file size
-            (self.processed_data
-             .repartition(1)  # Single output file for small/medium datasets
-             .write
-             .mode('overwrite')
-             .option("header", "true")
-             .parquet(path))  # Use parquet for better performance
+            self.processed_data.write \
+                .mode("overwrite") \
+                .option("header", "true") \
+                .csv(path)
             
-            logger.info(f"Processed data saved to {path} as Parquet")
-    
-    def get_pipeline_summary(self) -> Dict[str, Any]:
-        """Get summary statistics of the processed data"""
+            print(f"Processed data saved to {path}")
+            
+            # Save pipeline model
+            self.pipeline_model.write().overwrite().save("pyspark_pipeline_model")
+            print("Pipeline model saved as 'pyspark_pipeline_model'")
+
+    def transform_new_data(self, new_data_path: str) -> DataFrame:
+        """Transform new data using the fitted pipeline"""
+        if self.pipeline_model is None:
+            raise ValueError("Pipeline not fitted yet. Call fit_transform first.")
+        
+        # Load new data
+        new_df = self.spark.read \
+            .option("header", "true") \
+            .option("inferSchema", "true") \
+            .csv(new_data_path)
+        
+        # Transform using fitted pipeline
+        return self.pipeline_model.transform(new_df)
+
+    def show_pipeline_summary(self):
+        """Display pipeline summary and results"""
         if self.processed_data is None:
-            return {}
+            print("No processed data available. Run fit_transform first.")
+            return
         
-        summary = {
-            "total_records": self.processed_data.count(),
-            "total_columns": len(self.processed_data.columns),
-            "column_names": self.processed_data.columns,
-            "data_types": dict(self.processed_data.dtypes)
-        }
+        print("\nPipeline Summary:")
+        print(f"Processed data shape: ({self.processed_data.count():,} rows, {len(self.processed_data.columns)} columns)")
         
-        return summary
+        print("\nSample of processed data:")
+        self.processed_data.show(5)
+        
+        print("\nData types after processing:")
+        self.processed_data.dtypes
+        
+        # Show new columns created
+        new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
+                      'Email_Domain_Legitimate', 'Email_Disposable']
+        
+        print("\nNew columns created by data cleaning:")
+        for col_name in new_columns:
+            if col_name in self.processed_data.columns:
+                non_null_count = self.processed_data.filter(col(col_name).isNotNull()).count()
+                print(f"{col_name}: {non_null_count:,} non-null values")
+        
+        # Show phone number validation results
+        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
+        for col_name in phone_columns:
+            valid_col = f'{col_name}_Valid'
+            if valid_col in self.processed_data.columns:
+                valid_count = self.processed_data.filter(col(valid_col) == True).count()
+                total_count = self.processed_data.filter(col(valid_col).isNotNull()).count()
+                print(f"{valid_col}: {valid_count:,}/{total_count:,} valid numbers")
 
 # Example usage
 if __name__ == "__main__":
@@ -571,47 +572,13 @@ if __name__ == "__main__":
     pyspark_pipeline = PySparkDataPipeline('singapore_loan_data.csv')
     
     # Run the complete pipeline
-    processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_parquet')
+    processed_data = pyspark_pipeline.fit_transform(save_path='processed_data')
     
     if processed_data is not None:
         # Display results
-        summary = pyspark_pipeline.get_pipeline_summary()
+        pyspark_pipeline.show_pipeline_summary()
         
-        print("\nPipeline Summary:")
-        print(f"Processed data shape: {summary['total_records']} rows, {summary['total_columns']} columns")
-        
-        print("\nSample of processed data:")
-        processed_data.show(5)
-        
-        print("\nData types after processing:")
-        for col_name, dtype in summary['data_types'].items():
-            print(f"{col_name}: {dtype}")
-        
-        # Show specific validation results
-        print("\nPhone number validation results:")
-        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-        for col in phone_columns:
-            valid_col = f'{col}_Valid'
-            if valid_col in processed_data.columns:
-                valid_stats = processed_data.agg(
-                    sum(col(valid_col).cast("integer")).alias("valid_count"),
-                    count(col(valid_col)).alias("total_count")
-                ).collect()[0]
-                print(f"{valid_col}: {valid_stats['valid_count']}/{valid_stats['total_count']} valid numbers")
-        
-        print("\nEmail validation results:")
-        if 'Email_Valid_Format' in processed_data.columns:
-            email_stats = processed_data.agg(
-                sum(col('Email_Valid_Format').cast("integer")).alias("valid_emails"),
-                count('Email_Valid_Format').alias("total_emails")
-            ).collect()[0]
-            print(f"Valid emails: {email_stats['valid_emails']}/{email_stats['total_emails']}")
-        
-        # Show memory usage
-        print(f"\nData partitions: {processed_data.rdd.getNumPartitions()}")
-        
+        # Stop Spark session
+        pyspark_pipeline.spark.stop()
     else:
-        print("PySpark pipeline failed to process data.")
-    
-    # Stop Spark session
-    spark.stop()
+        print("Pipeline failed to process data.")
