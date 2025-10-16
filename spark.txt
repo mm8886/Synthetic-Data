@@ -42,7 +42,8 @@ class IncomeBandEncoder(Transformer):
 
     def _transform(self, df):
         if 'Income_Band_SGD' in df.columns:
-            mapping_expr = create_map([lit(x) for x in sum(self.income_mapping.items(), ())])
+            # Create mapping expression correctly
+            mapping_expr = create_map([lit(x) for item in self.income_mapping.items() for x in item])
             return df.withColumn('Income_Band_SGD', mapping_expr[col('Income_Band_SGD')])
         return df
 
@@ -59,7 +60,7 @@ class BooleanConverter(Transformer):
                     col_name,
                     when(lower(col(col_name)).isin(['true', '1', 'yes']), True)
                     .when(lower(col(col_name)).isin(['false', '0', 'no']), False)
-                    .otherwise(None)
+                    .otherwise(col(col_name))  # Keep original value if not in mapping
                 )
         return result_df
 
@@ -229,7 +230,7 @@ class PySparkDataPipeline:
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
             .getOrCreate()
         
-        self.pipeline = None
+        self.pipeline_stages = []
         self.processed_data = None
         self._build_pipeline()
 
@@ -298,39 +299,66 @@ class PySparkDataPipeline:
             )
             stages.append(numeric_imputer)
             
-            # Scale numeric columns
-            for col in numeric_features:
+            # Scale numeric columns - create vectors first
+            assemblers = []
+            scalers = []
+            
+            for col_name in numeric_features:
+                # Vector assembler for single column
                 assembler = VectorAssembler(
-                    inputCols=[f"{col}_imputed"],
-                    outputCol=f"{col}_vec"
+                    inputCols=[f"{col_name}_imputed"],
+                    outputCol=f"{col_name}_vec"
                 )
+                assemblers.append(assembler)
+                
+                # Standard scaler
                 scaler = StandardScaler(
-                    inputCol=f"{col}_vec",
-                    outputCol=f"{col}_scaled",
+                    inputCol=f"{col_name}_vec",
+                    outputCol=f"{col_name}_scaled",
                     withStd=True,
                     withMean=True
                 )
-                stages.extend([assembler, scaler])
+                scalers.append(scaler)
+            
+            # Add all assemblers and scalers to stages
+            stages.extend(assemblers)
+            stages.extend(scalers)
         
         # Handle categorical columns - one-hot encoding
-        for col in categorical_features:
-            if col in df.columns:
+        indexers = []
+        encoders = []
+        
+        for col_name in categorical_features:
+            if col_name in df.columns:
                 # String indexer
                 indexer = StringIndexer(
-                    inputCol=col,
-                    outputCol=f"{col}_indexed",
+                    inputCol=col_name,
+                    outputCol=f"{col_name}_indexed",
                     handleInvalid="keep"
                 )
+                indexers.append(indexer)
                 
                 # One-hot encoder
                 encoder = OneHotEncoder(
-                    inputCol=f"{col}_indexed",
-                    outputCol=f"{col}_encoded"
+                    inputCols=[f"{col_name}_indexed"],
+                    outputCols=[f"{col_name}_encoded"],
+                    handleInvalid="keep"
                 )
-                
-                stages.extend([indexer, encoder])
+                encoders.append(encoder)
+        
+        stages.extend(indexers)
+        stages.extend(encoders)
         
         return stages
+
+    def _rename_columns_for_compatibility(self, df):
+        """Rename columns to remove special characters for Spark compatibility"""
+        # Replace spaces and special characters with underscores
+        for old_col in df.columns:
+            new_col = old_col.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')
+            if old_col != new_col:
+                df = df.withColumnRenamed(old_col, new_col)
+        return df
 
     def fit_transform(self, save_path=None):
         """Run the complete pipeline and return processed data"""
@@ -345,6 +373,9 @@ class PySparkDataPipeline:
             original_shape = (df.count(), len(df.columns))
             print(f"Successfully loaded {original_shape[0]:,} rows")
 
+            # Rename columns for compatibility
+            df = self._rename_columns_for_compatibility(df)
+
             # Apply custom transformations
             print("Applying preprocessing steps...")
             for stage in self.pipeline_stages:
@@ -353,6 +384,7 @@ class PySparkDataPipeline:
 
             # Remove duplicates
             df = df.dropDuplicates()
+            print(f"After removing duplicates: {df.count():,} rows")
 
             # Apply standard preprocessing
             print("Applying standard preprocessing...")
@@ -363,34 +395,20 @@ class PySparkDataPipeline:
                 pipeline_model = pipeline.fit(df)
                 df = pipeline_model.transform(df)
 
-            # Drop intermediate columns and keep only final scaled/encoded columns
+            # Create final column selection
             final_columns = []
             
-            # Keep original non-numeric, non-categorical columns
-            all_columns = set(df.columns)
-            numeric_cols = set(self._get_numeric_columns())
-            categorical_cols = set(self._get_categorical_columns())
+            # Keep original identifier and non-processed columns
+            base_columns = ['Customer_id', 'Loan_Account_id', 'Name']  # Add other base columns as needed
             
-            for col in all_columns:
-                if col not in [f"{c}_imputed" for c in numeric_cols] + \
-                   [f"{c}_vec" for c in numeric_cols] + \
-                   [f"{c}_indexed" for c in categorical_cols] and \
-                   not col.endswith('_imputed') and not col.endswith('_vec'):
+            for col in df.columns:
+                # Skip intermediate processing columns
+                if not any(x in col for x in ['_imputed', '_vec', '_indexed']):
                     final_columns.append(col)
             
-            # Add scaled numeric columns
-            for col in self._get_numeric_columns():
-                if f"{col}_scaled" in df.columns:
-                    final_columns.append(f"{col}_scaled")
-            
-            # Add encoded categorical columns  
-            for col in self._get_categorical_columns():
-                if f"{col}_encoded" in df.columns:
-                    final_columns.append(f"{col}_encoded")
-
             df = df.select(final_columns)
             
-            # Convert vector columns to multiple scalar columns for numeric features
+            # Convert vector columns to scalar columns for numeric features
             for col in self._get_numeric_columns():
                 scaled_col = f"{col}_scaled"
                 if scaled_col in df.columns:
@@ -419,7 +437,13 @@ class PySparkDataPipeline:
         """Save the processed data"""
         if self.processed_data is not None:
             # Coalesce to a single partition for output
-            self.processed_data.coalesce(1).write.mode("overwrite").option("header", "true").csv(path)
+            (self.processed_data
+             .coalesce(1)
+             .write
+             .mode("overwrite")
+             .option("header", "true")
+             .option("delimiter", ",")
+             .csv(path))
             print(f"Processed data saved to {path}")
 
     def show_sample_results(self, num_rows=5):
@@ -432,7 +456,8 @@ class PySparkDataPipeline:
             self.processed_data.show(num_rows)
             
             print("\nData types after processing:")
-            self.processed_data.dtypes
+            for col_name, col_type in self.processed_data.dtypes:
+                print(f"{col_name}: {col_type}")
             
             # Show new columns created
             new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
