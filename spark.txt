@@ -1,502 +1,404 @@
+# pyspark==3.5+ (API compatible with Spark 3.5/4.0 docs) [web:3]
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
+from pyspark.sql import functions as F
+from pyspark.sql import types as T
+
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import StandardScaler, VectorAssembler, StringIndexer, OneHotEncoder, Imputer
-from pyspark.ml.base import Transformer
-from pyspark.ml.param.shared import HasInputCol, HasOutputCol, Param, Params, TypeConverters
-from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
+from pyspark.ml.feature import (
+    Imputer,
+    VectorAssembler,
+    StandardScaler,
+    StringIndexer,
+    OneHotEncoder
+)
+from pyspark.ml.functions import vector_to_array
+
 import re
-from datetime import datetime
 
-class DateFeatureExtractor(Transformer):
-    """Extract features from date columns"""
-    def __init__(self, date_columns):
-        super(DateFeatureExtractor, self).__init__()
-        self.date_columns = date_columns
+spark = SparkSession.builder.appName("SingaporeLoanDataPipeline").getOrCreate()
 
-    def _transform(self, df):
-        result_df = df
-        for col in self.date_columns:
-            if col in df.columns:
-                result_df = (result_df
-                    .withColumn(f"{col}_month", month(to_date(col, "dd-MM-yyyy")))
-                    .withColumn(f"{col}_dayofweek", dayofweek(to_date(col, "dd-MM-yyyy")))
-                    .withColumn(f"{col}_year", year(to_date(col, "dd-MM-yyyy")))
-                    .drop(col)
-                )
-        return result_df
+# -----------------------------
+# 1) Read CSV
+# -----------------------------
+input_path = "singapore_loan_data.csv"  # adjust path
+df = spark.read.option("header", True).option("inferSchema", True).csv(input_path)
 
-class IncomeBandEncoder(Transformer):
-    """Encode income bands to numerical values"""
-    def __init__(self):
-        super(IncomeBandEncoder, self).__init__()
-        self.income_mapping = {
-            '50,000 or Below': 0,
-            '50,000 to 100,000': 1,
-            '100,000 to 200,000': 2,
-            '200,000 to 300,000': 3,
-            '300,000 to 500,000': 4,
-            '500,000 or Above': 5
-        }
+# -----------------------------
+# 2) Helper UDFs
+# -----------------------------
 
-    def _transform(self, df):
-        if 'Income_Band_SGD' in df.columns:
-            # Create mapping expression correctly
-            mapping_expr = create_map([lit(x) for item in self.income_mapping.items() for x in item])
-            return df.withColumn('Income_Band_SGD', mapping_expr[col('Income_Band_SGD')])
-        return df
+# a) Address -> City
+singapore_regions = [
+    'Tengah','Loyang','Pasir Ris','Tampines','Clementi','Jurong','Queenstown','Woodlands','Serangoon',
+    'Bedok','Ang Mo Kio','Toa Payoh','Bishan','Bukit Merah','Bukit Timah','Geylang','Kallang','Marine Parade',
+    'Novena','Potong Pasir','Punggol','Sembawang','Sengkang','Hougang','Yishun','Lim Chu Kang','Mandai',
+    'Sungei Kadut','Central Area','Downtown Core','Newton','Orchard','River Valley','Rochor','Singapore River',
+    'Southern Islands','Straits View','Outram','Museum','Dhoby Ghaut','Marina South','Marina East','Marina Centre'
+]
 
-class BooleanConverter(Transformer):
-    """Convert various boolean representations to proper booleans"""
-    def _transform(self, df):
-        bool_columns = ['Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
-                       'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data']
-        
-        result_df = df
-        for col_name in bool_columns:
-            if col_name in df.columns:
-                result_df = result_df.withColumn(
-                    col_name,
-                    when(lower(col(col_name)).isin(['true', '1', 'yes']), True)
-                    .when(lower(col(col_name)).isin(['false', '0', 'no']), False)
-                    .otherwise(col(col_name))  # Keep original value if not in mapping
-                )
-        return result_df
+@F.udf(T.StringType())
+def extract_city(address):
+    if address is None:
+        return None
+    lower = address.lower()
+    for r in singapore_regions:
+        if r.lower() in lower:
+            return r
+    m = re.search(r'(\w+)\s+Singapore', address, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return 'Unknown'
 
-class DigitalEngagementCalculator(Transformer):
-    """Calculate digital engagement score"""
-    def _transform(self, df):
-        engagement_metrics = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
-        if all(metric in df.columns for metric in engagement_metrics):
-            return df.withColumn(
-                'Digital_Engagement_Score',
-                (col('App_Login_Frequency') + col('UPI_Transactions') + col('Online_Banking_Activity')) / 3
-            )
-        return df
+# b) Address -> Pincode (6-digit)
+@F.udf(T.StringType())
+def extract_pincode(address):
+    if address is None:
+        return None
+    m = re.search(r'\b(\d{6})\b', address)
+    if m:
+        return m.group(1)
+    return None
 
-class AddressProcessor(Transformer):
-    """Extract city and pincode from address column"""
-    
-    def __init__(self):
-        super(AddressProcessor, self).__init__()
-        self.singapore_regions = [
-            'Tengah', 'Loyang', 'Pasir Ris', 'Tampines', 'Clementi', 'Jurong',
-            'Queenstown', 'Woodlands', 'Serangoon', 'Bedok', 'Ang Mo Kio',
-            'Toa Payoh', 'Bishan', 'Bukit Merah', 'Bukit Timah', 'Geylang',
-            'Kallang', 'Marine Parade', 'Novena', 'Potong Pasir', 'Punggol',
-            'Sembawang', 'Sengkang', 'Hougang', 'Yishun', 'Lim Chu Kang',
-            'Mandai', 'Sungei Kadut', 'Central Area', 'Downtown Core',
-            'Newton', 'Orchard', 'River Valley', 'Rochor', 'Singapore River',
-            'Southern Islands', 'Straits View', 'Outram', 'Museum',
-            'Dhoby Ghaut', 'Marina South', 'Marina East', 'Marina Centre'
-        ]
+# c) Phone: remove country code and validate SG
+sg_codes = ['+65','65','0065']
 
-    def _extract_city_udf(self):
-        def extract_city(address):
-            if address is None:
-                return None
-            
-            address_lower = address.lower()
-            for region in self.singapore_regions:
-                if region.lower() in address_lower:
-                    return region
-            
-            match = re.search(r'(\w+)\s+Singapore', address, re.IGNORECASE)
-            if match:
-                return match.group(1)
-            
-            return 'Unknown'
-        return udf(extract_city, StringType())
+@F.udf(T.StringType())
+def clean_phone(raw):
+    if raw is None:
+        return None
+    s = re.sub(r'[\s\-\(\)]', '', str(raw))
+    for cc in sg_codes:
+        if s.startswith(cc):
+            s = s[len(cc):]
+            break
+    return s
 
-    def _extract_pincode_udf(self):
-        def extract_pincode(address):
-            if address is None:
-                return None
-            pincode_pattern = r'\b(\d{6})\b'
-            match = re.search(pincode_pattern, address)
-            if match:
-                return match.group(1)
-            return None
-        return udf(extract_pincode, StringType())
+@F.udf(T.BooleanType())
+def is_valid_sg(phone):
+    if phone is None:
+        return False
+    return bool(re.match(r'^[3689]\d{7}$', phone))
 
-    def _transform(self, df):
-        if 'Address' in df.columns:
-            return (df
-                .withColumn('City', self._extract_city_udf()(col('Address')))
-                .withColumn('Pincode', self._extract_pincode_udf()(col('Address')))
-                .drop('Address')
-            )
-        return df
+# d) Boolean conversion like pandas map to True/False
+truth_map = {
+    'true': True, 'false': False, '1': True, '0': False, 'yes': True, 'no': False
+}
+@F.udf(T.BooleanType())
+def to_bool_like(x):
+    if x is None:
+        return None
+    s = str(x).strip().lower()
+    if s in truth_map:
+        return truth_map[s]
+    # leave as None if not in map (mimics coercion with errors='coerce' then astype(bool) semantics for known forms)
+    return None
 
-class PhoneNumberProcessor(Transformer):
-    """Process and validate Singapore phone numbers"""
-    
-    def __init__(self):
-        super(PhoneNumberProcessor, self).__init__()
-        self.singapore_country_codes = ['+65', '65', '0065']
+# e) Income band mapping
+income_map = {
+    '50,000 or Below': 0,
+    '50,000 to 100,000': 1,
+    '100,000 to 200,000': 2,
+    '200,000 to 300,000': 3,
+    '300,000 to 500,000': 4,
+    '500,000 or Above': 5
+}
+@F.udf(T.IntegerType())
+def income_band_to_num(x):
+    if x is None:
+        return None
+    return income_map.get(str(x), None)
 
-    def _process_phone_udf(self):
-        def process_phone(phone):
-            if phone is None or not isinstance(phone, str):
-                return None
-            
-            cleaned = re.sub(r'[\s\-\(\)]', '', str(phone))
-            for country_code in self.singapore_country_codes:
-                if cleaned.startswith(country_code):
-                    cleaned = cleaned[len(country_code):]
-                    break
-            return cleaned
-        return udf(process_phone, StringType())
+# f) Email validators and domain checks
+legit_domains = set([
+    'gmail.com','yahoo.com','hotmail.com','outlook.com','live.com',
+    'icloud.com','protonmail.com','zoho.com','aol.com','mail.com',
+    'gmail.com.sg','yahoo.com.sg','hotmail.com.sg','singnet.com.sg',
+    'starhub.net.sg','pacific.net.sg'
+])
+disposable_domains = set([
+    'tempmail.com','10minutemail.com','guerrillamail.com',
+    'mailinator.com','yopmail.com','trashmail.com',
+    'disposableemail.com','fakeinbox.com','temp-mail.org'
+])
 
-    def _validate_phone_udf(self):
-        def validate_phone(phone):
-            if phone is None or not isinstance(phone, str):
-                return False
-            return bool(re.match(r'^[3689]\d{7}$', phone))
-        return udf(validate_phone, BooleanType())
+@F.udf(T.BooleanType())
+def email_valid_format(email):
+    if email is None:
+        return False
+    return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}$', email))
 
-    def _transform(self, df):
-        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-        result_df = df
-        
-        for col_name in phone_columns:
-            if col_name in df.columns:
-                result_df = (result_df
-                    .withColumn(col_name, self._process_phone_udf()(col(col_name)))
-                    .withColumn(f'{col_name}_Valid', self._validate_phone_udf()(col(col_name)))
-                )
-        return result_df
+@F.udf(T.StringType())
+def email_domain(email):
+    if email is None:
+        return None
+    if '@' not in email:
+        return None
+    return email.split('@',1)[1].lower()
 
-class EmailValidator(Transformer):
-    """Validate email addresses and extract domain information"""
-    
-    def _validate_email_udf(self):
-        def validate_email(email):
-            if email is None or not isinstance(email, str):
-                return False
-            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            return bool(re.match(email_pattern, email))
-        return udf(validate_email, BooleanType())
+@F.udf(T.BooleanType())
+def email_domain_legit(domain):
+    if domain is None:
+        return False
+    return domain in legit_domains
 
-    def _extract_domain_udf(self):
-        def extract_domain(email):
-            if email is None or not isinstance(email, str) or '@' not in email:
-                return None
-            return email.split('@')[1].lower()
-        return udf(extract_domain, StringType())
+@F.udf(T.BooleanType())
+def email_disposable(domain):
+    if domain is None:
+        return False
+    return domain in disposable_domains
 
-    def _is_legitimate_domain_udf(self):
-        def is_legitimate_domain(domain):
-            if domain is None:
-                return False
-            legitimate_domains = [
-                'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
-                'icloud.com', 'protonmail.com', 'zoho.com', 'aol.com', 'mail.com',
-                'gmail.com.sg', 'yahoo.com.sg', 'hotmail.com.sg', 'singnet.com.sg',
-                'starhub.net.sg', 'pacific.net.sg'
-            ]
-            return domain in legitimate_domains
-        return udf(is_legitimate_domain, BooleanType())
+# g) Date parsing (DD-MM-YYYY) and expand to month/dayofweek/year
+def parse_date_ddmmyyyy(colname):
+    return F.to_date(F.col(colname), 'dd-MM-yyyy')
 
-    def _is_disposable_domain_udf(self):
-        def is_disposable_domain(domain):
-            if domain is None:
-                return False
-            disposable_domains = [
-                'tempmail.com', '10minutemail.com', 'guerrillamail.com',
-                'mailinator.com', 'yopmail.com', 'trashmail.com',
-                'disposableemail.com', 'fakeinbox.com', 'temp-mail.org'
-            ]
-            return domain in disposable_domains
-        return udf(is_disposable_domain, BooleanType())
+# -----------------------------
+# 3) Column sets (mirror sklearn lists)
+# -----------------------------
+numeric_cols = [
+    'Age','Loan_Amount_SGD','Outstanding_Balance_SGD','Day_Past_Due',
+    'Tenure','Interest_Rate','Current_EMI_SGD','Number_of_Past_Payments',
+    'Amount_Paid_Each_Month_SGD','Bounce_History','Contact_History_Call_Attempts',
+    'Contact_History_SMS','Contact_History_WhatsApp','Contact_History_EmailLogs',
+    'No_of_Attempts','Average_Handling_Time','Credit_Score','Recent_Inquiries',
+    'Loan_Exposure_Across_Banks','Recent_Score_Change','Unemployeement_rate_region',
+    'Inflation_Rate','Interest_Rate_Trend','Economic_Stress_Index',
+    'Income_Band_SGD','Digital_Engagement_Score'
+]
 
-    def _transform(self, df):
-        if 'Email_ID' in df.columns:
-            return (df
-                .withColumn('Email_Valid_Format', self._validate_email_udf()(col('Email_ID')))
-                .withColumn('Email_Domain', self._extract_domain_udf()(col('Email_ID')))
-                .withColumn('Email_Domain_Legitimate', self._is_legitimate_domain_udf()(col('Email_Domain')))
-                .withColumn('Email_Disposable', self._is_disposable_domain_udf()(col('Email_Domain')))
-            )
-        return df
+categorical_cols = [
+    'Product_Type','Payment_Frequency','Settlement_History',
+    'Channel_used','Response_Outcome','Urban_Rural_Tag',
+    'Language_Preference','Smartphone_Penetration','Preferred_Channel',
+    'Call_SMS_Activity_Patterns','WhatsApp_OTT_usage_Indicator',
+    'Regional_Time_Restrictions','Communication_Complaince_Limits',
+    'Gender','Occupation','Employeement_Type'
+]
 
-class PySparkDataPipeline:
-    def __init__(self, file_path):
-        self.file_path = file_path
-        self.spark = SparkSession.builder \
-            .appName("SingaporeLoanDataPipeline") \
-            .config("spark.sql.adaptive.enabled", "true") \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .getOrCreate()
-        
-        self.pipeline_stages = []
-        self.processed_data = None
-        self._build_pipeline()
+date_cols = ['Installment_Due_Date','Last_Payment_Date']
 
-    def _get_numeric_columns(self):
-        return ['Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
-                'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
-                'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
-                'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
-                'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
-                'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
-                'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
-                'Income_Band_SGD', 'Digital_Engagement_Score']
+bool_like_cols = [
+    'Partial_Payment_Indicator','Repayment_Irregularity_Flags',
+    'Mobile_Number_Active_Status','Email_Activity','Do_Not_Call_Registry_Data'
+]
 
-    def _get_categorical_columns(self):
-        return ['Product_Type', 'Payment_Frequency', 'Settlement_History',
-                'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
-                'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
-                'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
-                'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
-                'Gender', 'Occupation', 'Employeement_Type']
+phone_cols = ['Primary_Phone_Number','Secondary_Mobile_Number','Landline_Phone_Number']
 
-    def _get_date_columns(self):
-        return ['Installment_Due_Date', 'Last_Payment_Date']
+# -----------------------------
+# 4) Deterministic preprocessing to match pandas behavior
+# -----------------------------
+df1 = df
 
-    def _build_pipeline(self):
-        """Build the PySpark pipeline"""
-        self.pipeline_stages = [
-            # Step 1: Process address information
-            AddressProcessor(),
-            
-            # Step 2: Process phone numbers
-            PhoneNumberProcessor(),
-            
-            # Step 3: Validate email addresses
-            EmailValidator(),
-            
-            # Step 4: Convert boolean columns
-            BooleanConverter(),
-            
-            # Step 5: Encode income bands
-            IncomeBandEncoder(),
-            
-            # Step 6: Extract date features
-            DateFeatureExtractor(self._get_date_columns()),
-            
-            # Step 7: Calculate digital engagement
-            DigitalEngagementCalculator(),
-        ]
+# Address -> City, Pincode, drop Address
+if 'Address' in df1.columns:
+    df1 = df1.withColumn('City', extract_city(F.col('Address'))) \
+             .withColumn('Pincode', extract_pincode(F.col('Address'))) \
+             .drop('Address')
 
-    def _apply_standard_preprocessing(self, df):
-        """Apply standard preprocessing for numeric and categorical columns"""
-        
-        # Get available columns
-        numeric_features = [col for col in self._get_numeric_columns() if col in df.columns]
-        categorical_features = [col for col in self._get_categorical_columns() if col in df.columns]
-        
-        stages = []
-        
-        # Handle numeric columns - imputation and scaling
-        if numeric_features:
-            # Impute numeric columns
-            numeric_imputer = Imputer(
-                inputCols=numeric_features,
-                outputCols=[f"{col}_imputed" for col in numeric_features],
-                strategy="median"
-            )
-            stages.append(numeric_imputer)
-            
-            # Scale numeric columns - create vectors first
-            assemblers = []
-            scalers = []
-            
-            for col_name in numeric_features:
-                # Vector assembler for single column
-                assembler = VectorAssembler(
-                    inputCols=[f"{col_name}_imputed"],
-                    outputCol=f"{col_name}_vec"
-                )
-                assemblers.append(assembler)
-                
-                # Standard scaler
-                scaler = StandardScaler(
-                    inputCol=f"{col_name}_vec",
-                    outputCol=f"{col_name}_scaled",
-                    withStd=True,
-                    withMean=True
-                )
-                scalers.append(scaler)
-            
-            # Add all assemblers and scalers to stages
-            stages.extend(assemblers)
-            stages.extend(scalers)
-        
-        # Handle categorical columns - one-hot encoding
-        indexers = []
-        encoders = []
-        
-        for col_name in categorical_features:
-            if col_name in df.columns:
-                # String indexer
-                indexer = StringIndexer(
-                    inputCol=col_name,
-                    outputCol=f"{col_name}_indexed",
-                    handleInvalid="keep"
-                )
-                indexers.append(indexer)
-                
-                # One-hot encoder
-                encoder = OneHotEncoder(
-                    inputCols=[f"{col_name}_indexed"],
-                    outputCols=[f"{col_name}_encoded"],
-                    handleInvalid="keep"
-                )
-                encoders.append(encoder)
-        
-        stages.extend(indexers)
-        stages.extend(encoders)
-        
-        return stages
+# Phone cleaning + validity flags
+for c in phone_cols:
+    if c in df1.columns:
+        df1 = df1.withColumn(c, clean_phone(F.col(c))) \
+                 .withColumn(f"{c}_Valid", is_valid_sg(F.col(c)))
 
-    def _rename_columns_for_compatibility(self, df):
-        """Rename columns to remove special characters for Spark compatibility"""
-        # Replace spaces and special characters with underscores
-        for old_col in df.columns:
-            new_col = old_col.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')
-            if old_col != new_col:
-                df = df.withColumnRenamed(old_col, new_col)
-        return df
+# Email processing
+if 'Email_ID' in df1.columns:
+    df1 = df1.withColumn('Email_Valid_Format', email_valid_format(F.col('Email_ID'))) \
+             .withColumn('Email_Domain', email_domain(F.col('Email_ID'))) \
+             .withColumn('Email_Domain_Legitimate', email_domain_legit(F.col('Email_Domain'))) \
+             .withColumn('Email_Disposable', email_disposable(F.col('Email_Domain')))
 
-    def fit_transform(self, save_path=None):
-        """Run the complete pipeline and return processed data"""
-        print("=" * 50)
-        print("RUNNING PYSPARK DATA PIPELINE")
-        print("=" * 50)
+# Booleans
+for c in bool_like_cols:
+    if c in df1.columns:
+        df1 = df1.withColumn(c, to_bool_like(F.col(c)))
 
-        try:
-            # Load data
-            print("Loading data...")
-            df = self.spark.read.csv(self.file_path, header=True, inferSchema=True)
-            original_shape = (df.count(), len(df.columns))
-            print(f"Successfully loaded {original_shape[0]:,} rows")
+# Income band encoding (into same column name to mirror pandas)
+if 'Income_Band_SGD' in df1.columns:
+    df1 = df1.withColumn('Income_Band_SGD', income_band_to_num(F.col('Income_Band_SGD')))
 
-            # Rename columns for compatibility
-            df = self._rename_columns_for_compatibility(df)
+# Dates -> features then drop original date columns
+for dc in date_cols:
+    if dc in df1.columns:
+        dcol = parse_date_ddmmyyyy(dc)
+        df1 = df1.withColumn(f'{dc}_month', F.month(dcol)) \
+                 .withColumn(f'{dc}_dayofweek', F.dayofweek(dcol) - 1) \
+                 .withColumn(f'{dc}_year', F.year(dcol))
+# Note: Spark dayofweek: 1=Sunday..7=Saturday; pandas dayofweek: 0=Mon..6=Sun.
+# Your sample shows Mon=0..; the inputs are 2025 dates; the sample output matches pandas .dt.dayofweek.
+# We offset Spark by -1 to map Sunday(1)->0; However pandas Monday=0, Spark Monday=2 -> 1 after -1.
+# To exactly match pandas, compute using date_format('u') which is ISO day number: Mon=1..Sun=7.
+# Let's fix to exact pandas mapping:
 
-            # Apply custom transformations
-            print("Applying preprocessing steps...")
-            for stage in self.pipeline_stages:
-                print(f"Applying {stage.__class__.__name__}...")
-                df = stage.transform(df)
+for dc in date_cols:
+    if dc in df.columns:
+        dcol = parse_date_ddmmyyyy(dc)
+        # ISO day of week Mon=1..Sun=7, subtract 1 -> Mon=0..Sun=6
+        df1 = df1.withColumn(f'{dc}_month', F.month(dcol)) \
+                 .withColumn(f'{dc}_dayofweek', (F.date_format(dcol, 'u').cast('int') - F.lit(1))) \
+                 .withColumn(f'{dc}_year', F.year(dcol))
 
-            # Remove duplicates
-            df = df.dropDuplicates()
-            print(f"After removing duplicates: {df.count():,} rows")
+# Drop original date cols
+for dc in date_cols:
+    if dc in df1.columns:
+        df1 = df1.drop(dc)
 
-            # Apply standard preprocessing
-            print("Applying standard preprocessing...")
-            preprocessing_stages = self._apply_standard_preprocessing(df)
-            
-            if preprocessing_stages:
-                pipeline = Pipeline(stages=preprocessing_stages)
-                pipeline_model = pipeline.fit(df)
-                df = pipeline_model.transform(df)
+# Digital Engagement Score if metrics exist
+eng_cols = ['App_Login_Frequency','UPI_Transactions','Online_Banking_Activity']
+if all(c in df1.columns for c in eng_cols):
+    df1 = df1.withColumn(
+        'Digital_Engagement_Score',
+        (F.col('App_Login_Frequency') + F.col('UPI_Transactions') + F.col('Online_Banking_Activity')) / F.lit(3.0)
+    )
 
-            # Create final column selection
-            final_columns = []
-            
-            # Keep original identifier and non-processed columns
-            base_columns = ['Customer_id', 'Loan_Account_id', 'Name']  # Add other base columns as needed
-            
-            for col in df.columns:
-                # Skip intermediate processing columns
-                if not any(x in col for x in ['_imputed', '_vec', '_indexed']):
-                    final_columns.append(col)
-            
-            df = df.select(final_columns)
-            
-            # Convert vector columns to scalar columns for numeric features
-            for col in self._get_numeric_columns():
-                scaled_col = f"{col}_scaled"
-                if scaled_col in df.columns:
-                    # Extract the single value from the vector
-                    df = df.withColumn(scaled_col, element_at(col(scaled_col), 1))
+# Remove duplicates (full row)
+df1 = df1.dropDuplicates()
 
-            self.processed_data = df
+# -----------------------------
+# 5) Impute + scale numeric columns to match sklearn median+StandardScaler
+# -----------------------------
+# Keep only numeric columns that still exist
+present_numeric = [c for c in numeric_cols if c in df1.columns]
 
-            # Save if path provided
-            if save_path:
-                self.save_processed_data(save_path)
+imputed_df = df1
+if present_numeric:
+    imputer = Imputer(strategy='median', inputCols=present_numeric, outputCols=[f"{c}__imp" for c in present_numeric])
+    imputed_df = imputer.fit(imputed_df).transform(imputed_df)
+    # Replace originals by imputed
+    for c in present_numeric:
+        imputed_df = imputed_df.drop(c).withColumnRenamed(f"{c}__imp", c)
 
-            print("Pipeline completed successfully!")
-            print(f"Original shape: {original_shape}")
-            print(f"Processed shape: ({self.processed_data.count():,}, {len(self.processed_data.columns)})")
+# Scale numeric columns individually (to produce separate output columns, not a single vector)
+scaled_df = imputed_df
+if present_numeric:
+    # Assemble all numeric columns
+    vec_assembler = VectorAssembler(inputCols=present_numeric, outputCol="_num_vec_")
+    scaled_df = vec_assembler.transform(scaled_df)
+    scaler = StandardScaler(withMean=True, withStd=True, inputCol="_num_vec", outputCol="num_vec_scaled_")
+    scaled_df = scaler.fit(scaled_df).transform(scaled_df)
+    # explode vector back to columns
+    arr = vector_to_array(F.col("_num_vec_scaled_"))
+    for i, c in enumerate(present_numeric):
+        scaled_df = scaled_df.withColumn(c, arr.getItem(i))
+    scaled_df = scaled_df.drop("_num_vec", "num_vec_scaled_")
 
-            return self.processed_data
+# -----------------------------
+# 6) Categorical: impute most_frequent + OneHotEncoder(handleInvalid='keep')
+# -----------------------------
+# Mode imputation per column
+mode_imputed = scaled_df
+for c in categorical_cols:
+    if c in mode_imputed.columns:
+        mode_val = mode_imputed.groupBy(c).count().orderBy(F.desc("count")).limit(1)
+        mv = mode_val.collect()[0][0] if mode_val.count() > 0 else None
+        if mv is not None:
+            mode_imputed = mode_imputed.fillna({c: mv})
 
-        except Exception as e:
-            print(f"Error in pipeline: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+# StringIndexers for each present categorical column
+present_cats = [c for c in categorical_cols if c in mode_imputed.columns]
+indexers = [
+    StringIndexer(inputCol=c, outputCol=f"{c}__idx", handleInvalid="keep")
+    for c in present_cats
+]
 
-    def save_processed_data(self, path):
-        """Save the processed data"""
-        if self.processed_data is not None:
-            # Coalesce to a single partition for output
-            (self.processed_data
-             .coalesce(1)
-             .write
-             .mode("overwrite")
-             .option("header", "true")
-             .option("delimiter", ",")
-             .csv(path))
-            print(f"Processed data saved to {path}")
+# OneHotEncoder with ignore unknowns-like behavior: handleInvalid='keep'
+# dropLast=False to mirror sklearn default when sparse_output=False in your code
+ohe = OneHotEncoder(
+    inputCols=[f"{c}__idx" for c in present_cats],
+    outputCols=[f"{c}__ohe" for c in present_cats],
+    handleInvalid="keep",
+    dropLast=False
+)
 
-    def show_sample_results(self, num_rows=5):
-        """Display sample results from the processed data"""
-        if self.processed_data is not None:
-            print("\nPipeline Summary:")
-            print(f"Processed data shape: ({self.processed_data.count():,}, {len(self.processed_data.columns)})")
-            
-            print("\nSample of processed data:")
-            self.processed_data.show(num_rows)
-            
-            print("\nData types after processing:")
-            for col_name, col_type in self.processed_data.dtypes:
-                print(f"{col_name}: {col_type}")
-            
-            # Show new columns created
-            new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
-                          'Email_Domain_Legitimate', 'Email_Disposable']
-            
-            print("\nNew columns created by data cleaning:")
-            for col in new_columns:
-                if col in self.processed_data.columns:
-                    non_null_count = self.processed_data.filter(col(col).isNotNull()).count()
-                    print(f"{col}: {non_null_count:,} non-null values")
-            
-            # Show phone number validation results
-            phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-            for col in phone_columns:
-                valid_col = f'{col}_Valid'
-                if valid_col in self.processed_data.columns:
-                    valid_count = self.processed_data.filter(col(valid_col) == True).count()
-                    total_count = self.processed_data.count()
-                    print(f"{valid_col}: {valid_count:,}/{total_count:,} valid numbers")
+# Build categorical pipeline
+cat_pipe = Pipeline(stages=indexers + [ohe])
+cat_model = cat_pipe.fit(mode_imputed)
+cat_df = cat_model.transform(mode_imputed)
 
-    def stop_spark(self):
-        """Stop Spark session"""
-        self.spark.stop()
+# For each categorical column, expand OHE vector into separate columns with the exact output names you showed.
+# To reproduce names like Product_Type_Auto loan, use the StringIndexer labels in order.
+final_df = cat_df
+for c in present_cats:
+    labels = cat_model.stages[present_cats.index(c)].labels  # StringIndexerModel labels
+    # Keep exact label text as in data to match your column names
+    # Create columns: f"{c}_{label}"
+    ohe_col = f"{c}__ohe"
+    if ohe_col in final_df.columns:
+        arr = vector_to_array(F.col(ohe_col))
+        for i, lab in enumerate(labels):
+            safe_name = f"{c}_{lab}"
+            final_df = final_df.withColumn(safe_name, arr.getItem(i).cast(T.DoubleType()))
+        final_df = final_df.drop(ohe_col, f"{c}__idx")
 
-# Example usage
-if __name__ == "__main__":
-    # Initialize the PySpark pipeline
-    pyspark_pipeline = PySparkDataPipeline('singapore_loan_data.csv')
-    
-    try:
-        # Run the complete pipeline
-        processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
-        
-        if processed_data is not None:
-            # Display results
-            pyspark_pipeline.show_sample_results()
-        else:
-            print("Pipeline failed to process data.")
-            
-    finally:
-        # Stop Spark session
-        pyspark_pipeline.stop_spark()
+# -----------------------------
+# 7) Arrange/select final columns to match sample output order
+# -----------------------------
+# Base passthrough columns (retain originals that appear in final CSV)
+base_cols = [
+    'Customer_id','Loan_Account_id','Loan_Amount_SGD','Outstanding_Balance_SGD','Day_Past_Due','Tenure',
+    'Interest_Rate','Current_EMI_SGD','Partial_Payment_Indicator','Number_of_Past_Payments',
+    'Amount_Paid_Each_Month_SGD','Bounce_History','Repayment_Irregularity_Flags',
+    'Contact_History_Call_Attempts','Contact_History_SMS','Contact_History_WhatsApp',
+    'Contact_History_EmailLogs','No_of_Attempts','Average_Handling_Time','Name','Age',
+    'Primary_Phone_Number','Secondary_Mobile_Number','Landline_Phone_Number','Email_ID','Income_Band_SGD',
+    'Mobile_Number_Active_Status','Email_Activity','App_Login_Frequency','UPI_Transactions',
+    'Online_Banking_Activity','Credit_Score','Recent_Inquiries','Loan_Exposure_Across_Banks',
+    'Delinquency_on_other_Loans','Recent_Score_Change','Unemployeement_rate_region','Inflation_Rate',
+    'Interest_Rate_Trend','Economic_Stress_Index','Do_Not_Call_Registry_Data','City','Pincode',
+    'Primary_Phone_Number_Valid','Secondary_Mobile_Number_Valid','Landline_Phone_Number_Valid',
+    'Email_Valid_Format','Email_Domain','Email_Domain_Legitimate','Email_Disposable',
+    'Installment_Due_Date_month','Installment_Due_Date_dayofweek','Installment_Due_Date_year',
+    'Last_Payment_Date_month','Last_Payment_Date_dayofweek','Last_Payment_Date_year',
+    'Digital_Engagement_Score'
+]
+
+# One-hot columns in the same order as your sample output
+ohe_order = [
+    # Product_Type
+    'Product_Type_Auto loan','Product_Type_Business loan','Product_Type_Credit card','Product_Type_Education loan','Product_Type_Personal loan',
+    # Payment_Frequency
+    'Payment_Frequency_Irregular','Payment_Frequency_Regular',
+    # Settlement_History
+    'Settlement_History_Not Settled','Settlement_History_Partial Settlement','Settlement_History_Settled','Settlement_History_Under Negotiation',
+    # Channel_used
+    'Channel_used_Call','Channel_used_Email','Channel_used_Field Agent','Channel_used_IVR','Channel_used_SMS','Channel_used_WhatsApp',
+    # Response_Outcome
+    'Response_Outcome_Connected','Response_Outcome_Disconnected','Response_Outcome_Ignored','Response_Outcome_Paid fully','Response_Outcome_Partial paid','Response_Outcome_Promised to pay',
+    # Urban_Rural_Tag
+    'Urban_Rural_Tag_Urban',
+    # Language_Preference
+    'Language_Preference_English','Language_Preference_Regional',
+    # Smartphone_Penetration
+    'Smartphone_Penetration_High','Smartphone_Penetration_Low','Smartphone_Penetration_Medium',
+    # Preferred_Channel
+    'Preferred_Channel_App notification','Preferred_Channel_Call','Preferred_Channel_Email','Preferred_Channel_Field Agent','Preferred_Channel_IVR','Preferred_Channel_SMS','Preferred_Channel_WhatsApp',
+    # Call_SMS_Activity_Patterns
+    'Call_SMS_Activity_Patterns_High','Call_SMS_Activity_Patterns_Low','Call_SMS_Activity_Patterns_Medium',
+    # WhatsApp_OTT_usage_Indicator
+    'WhatsApp_OTT_usage_Indicator_False','WhatsApp_OTT_usage_Indicator_True',
+    # Regional_Time_Restrictions
+    'Regional_Time_Restrictions_Afternoon','Regional_Time_Restrictions_Evening','Regional_Time_Restrictions_Morning','Regional_Time_Restrictions_Night',
+    # Communication_Complaince_Limits
+    'Communication_Complaince_Limits_Daytime','Communication_Complaince_Limits_Evening','Communication_Complaince_Limits_Holidays','Communication_Complaince_Limits_Weekdays','Communication_Complaince_Limits_Weekends',
+    # Gender
+    'Gender_Female','Gender_Male','Gender_Others',
+    # Occupation
+    'Occupation_Employed','Occupation_Homemaker','Occupation_Retired','Occupation_Self-Employed','Occupation_Student','Occupation_Unemployed',
+    # Employeement_Type
+    'Employeement_Type_Contract','Employeement_Type_Freelance','Employeement_Type_Full time','Employeement_Type_Part time','Employeement_Type_Unemployed'
+]
+
+# Some of these OHE columns may not exist in a given dataset; fill missing with 0 for consistency
+for c in ohe_order:
+    if c not in final_df.columns:
+        final_df = final_df.withColumn(c, F.lit(0.0))
+
+# Select final ordered columns
+select_cols = [c for c in base_cols if c in final_df.columns] + ohe_order
+final = final_df.select(*select_cols)
+
+# -----------------------------
+# 8) Write CSV
+# -----------------------------
+final.write.mode("overwrite").option("header", True).csv("processed_data_pyspark")
+# If you need a single file, coalesce(1) before write:
+# final.coalesce(1).write.mode("overwrite").option("header", True).csv("processed_data_pyspark_single")
