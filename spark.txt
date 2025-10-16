@@ -270,19 +270,27 @@ class PysparkDataPipeline:
         self.file_path = file_path
         self.pipeline = None
         self.processed_data = None
-        
-        # Create Spark session with optimized configuration
-        self.spark = SparkSession.builder \
-            .appName("SingaporeLoanDataPipeline") \
-            .config("spark.sql.adaptive.enabled", "true") \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.driver.memory", "2g") \
-            .config("spark.executor.memory", "2g") \
-            .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
-            .getOrCreate()
-        
-        self.spark.sparkContext.setLogLevel("ERROR")
+        self.spark = None
+        self._initialize_spark()
         self._build_pipeline()
+
+    def _initialize_spark(self):
+        """Initialize Spark session"""
+        try:
+            self.spark = SparkSession.builder \
+                .appName("SingaporeLoanDataPipeline") \
+                .config("spark.sql.adaptive.enabled", "true") \
+                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+                .config("spark.driver.memory", "2g") \
+                .config("spark.executor.memory", "2g") \
+                .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+                .getOrCreate()
+            
+            self.spark.sparkContext.setLogLevel("ERROR")
+            print("Spark session initialized successfully")
+        except Exception as e:
+            print(f"Error initializing Spark session: {e}")
+            raise
 
     def _get_numeric_columns(self):
         """Define numeric columns for preprocessing"""
@@ -377,12 +385,12 @@ class PysparkDataPipeline:
         print("=" * 50)
 
         try:
-            # Apply pipeline stages sequentially
+            # Start with the DataLoader which will load the actual data
             df = None
-            for stage in self.pipeline_stages:
+            for i, stage in enumerate(self.pipeline_stages):
                 print(f"Applying {stage.__class__.__name__}...")
-                if df is None:
-                    df = stage.transform(self.spark.createDataFrame([], StructType([])))
+                if i == 0:  # First stage (DataLoader) doesn't need input
+                    df = stage.transform(self.spark.emptyDataFrame)
                 else:
                     df = stage.transform(df)
                 
@@ -432,60 +440,64 @@ class PysparkDataPipeline:
 
     def __del__(self):
         """Clean up Spark session"""
-        if hasattr(self, 'spark'):
+        if hasattr(self, 'spark') and self.spark:
             self.spark.stop()
 
 # Example usage
 if __name__ == "__main__":
     print("Initializing PySpark Data Pipeline...")
     
-    # Initialize the PySpark pipeline
-    pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
+    try:
+        # Initialize the PySpark pipeline
+        pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
 
-    # Run the complete pipeline
-    processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
+        # Run the complete pipeline
+        processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
 
-    if processed_data is not None:
-        # Display results
-        print("\n" + "="*50)
-        print("PIPELINE SUMMARY")
-        print("="*50)
-        print(f"Processed data count: {processed_data.count():,}")
-        print(f"Processed data columns: {len(processed_data.columns)}")
+        if processed_data is not None:
+            # Display results
+            print("\n" + "="*50)
+            print("PIPELINE SUMMARY")
+            print("="*50)
+            print(f"Processed data count: {processed_data.count():,}")
+            print(f"Processed data columns: {len(processed_data.columns)}")
 
-        print("\nSample of processed data:")
-        processed_data.show(5, truncate=False)
+            print("\nSample of processed data:")
+            processed_data.show(5, truncate=False)
 
-        print("\nData types after processing:")
-        processed_data.printSchema()
+            print("\nData types after processing:")
+            processed_data.printSchema()
 
-        # Show the new columns created by the data cleaning processes
-        new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
-                       'Email_Domain_Legitimate', 'Email_Disposable']
+            # Show the new columns created by the data cleaning processes
+            new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
+                           'Email_Domain_Legitimate', 'Email_Disposable']
 
-        print("\nNew columns created by data cleaning:")
-        for col in new_columns:
-            if col in processed_data.columns:
-                non_null_count = processed_data.filter(col(col).isNotNull()).count()
-                print(f"  {col}: {non_null_count:,} non-null values")
+            print("\nNew columns created by data cleaning:")
+            for col in new_columns:
+                if col in processed_data.columns:
+                    non_null_count = processed_data.filter(col(col).isNotNull()).count()
+                    print(f"  {col}: {non_null_count:,} non-null values")
 
-        # Show phone number validation results
-        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-        print("\nPhone number validation results:")
-        for col in phone_columns:
-            valid_col = f'{col}_Valid'
-            if valid_col in processed_data.columns:
-                valid_count = processed_data.filter(col(valid_col) == True).count()
-                total_count = processed_data.filter(col(valid_col).isNotNull()).count()
-                print(f"  {valid_col}: {valid_count:,}/{total_count:,} valid numbers")
-        
-        # Show email validation results
-        if 'Email_Valid_Format' in processed_data.columns:
-            valid_emails = processed_data.filter(col('Email_Valid_Format') == True).count()
-            total_emails = processed_data.filter(col('Email_ID').isNotNull()).count()
-            print(f"\nEmail validation: {valid_emails:,}/{total_emails:,} valid emails")
+            # Show phone number validation results
+            phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
+            print("\nPhone number validation results:")
+            for col in phone_columns:
+                valid_col = f'{col}_Valid'
+                if valid_col in processed_data.columns:
+                    valid_count = processed_data.filter(col(valid_col) == True).count()
+                    total_count = processed_data.filter(col(valid_col).isNotNull()).count()
+                    print(f"  {valid_col}: {valid_count:,}/{total_count:,} valid numbers")
             
-    else:
-        print("Pipeline failed to process data.")
+            # Show email validation results
+            if 'Email_Valid_Format' in processed_data.columns:
+                valid_emails = processed_data.filter(col('Email_Valid_Format') == True).count()
+                total_emails = processed_data.filter(col('Email_ID').isNotNull()).count()
+                print(f"\nEmail validation: {valid_emails:,}/{total_emails:,} valid emails")
+                
+        else:
+            print("Pipeline failed to process data.")
+
+    except Exception as e:
+        print(f"Failed to run pipeline: {e}")
 
     print("\nPipeline execution completed.")
