@@ -1,84 +1,28 @@
-"""
-Singapore Loan Data Processing Pipeline - Production Ready
-PySpark 3.5+ recommended
-"""
-
-from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql import functions as F
-from pyspark.sql import types as T
-from pyspark.ml import Pipeline, PipelineModel
-from pyspark.ml.feature import (
-    StringIndexer, OneHotEncoder, Imputer, StandardScaler, VectorAssembler
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, when, udf, lower, to_date, month, dayofweek, year
 )
-from typing import List, Dict, Optional, Tuple
+from pyspark.sql.types import BooleanType, StringType
 import re
-import logging
-from dataclasses import dataclass
-from pathlib import Path
 
-# ===========================
-# Configuration
-# ===========================
-@dataclass
-class PipelineConfig:
-    """Configuration for the data pipeline"""
-    input_path: str = "singapore_loan_data.csv"
-    output_path: str = "processed_data.parquet"
-    model_path: str = "pipeline_model"
-    log_level: str = "INFO"
-    checkpoint_dir: str = "checkpoints"
+# -------------------------------------------
+# Initialize Spark session
+# -------------------------------------------
+spark = SparkSession.builder.appName("SingaporeLoanDataPipeline").getOrCreate()
 
-    # Data quality thresholds
-    min_data_completeness: float = 0.7
-    max_duplicate_ratio: float = 0.1
+# -------------------------------------------
+# Load CSV
+# -------------------------------------------
+def load_data(file_path):
+    df = spark.read.option("header", True).option("inferSchema", True).csv(file_path)
+    print(f"Loaded {df.count()} rows and {len(df.columns)} columns")
+    return df
 
-    # Spark configs
-    spark_configs: Dict[str, str] = None
-
-    def __post_init__(self):
-        if self.spark_configs is None:
-            self.spark_configs = {
-                "spark.sql.adaptive.enabled": "true",
-                "spark.sql.adaptive.coalescePartitions.enabled": "true",
-                "spark.sql.shuffle.partitions": "200"
-            }
-
-
-# ===========================
-# Logging Setup
-# ===========================
-def setup_logging(log_level: str = "INFO") -> logging.Logger:
-    """Configure logging for the pipeline"""
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    return logging.getLogger(__name__)
-
-
-# ===========================
-# Constants
-# ===========================
-class Constants:
-    """Pipeline constants and mappings"""
-
-    INCOME_MAPPING = {
-        '50,000 or Below': 0,
-        '50,000 to 100,000': 1,
-        '100,000 to 200,000': 2,
-        '200,000 to 300,000': 3,
-        '300,000 to 500,000': 4,
-        '500,000 or Above': 5
-    }
-
-    BOOL_MAPPING = {
-        'true': True, 'false': False,
-        '1': True, '0': False,
-        'yes': True, 'no': False,
-        't': True, 'f': False
-    }
-
-    SINGAPORE_REGIONS = [
+# -------------------------------------------
+# Address Processor
+# -------------------------------------------
+def process_address(df):
+    singapore_regions = [
         'Tengah', 'Loyang', 'Pasir Ris', 'Tampines', 'Clementi', 'Jurong',
         'Queenstown', 'Woodlands', 'Serangoon', 'Bedok', 'Ang Mo Kio',
         'Toa Payoh', 'Bishan', 'Bukit Merah', 'Bukit Timah', 'Geylang',
@@ -90,646 +34,152 @@ class Constants:
         'Dhoby Ghaut', 'Marina South', 'Marina East', 'Marina Centre'
     ]
 
-    LEGITIMATE_DOMAINS = [
+    @udf(StringType())
+    def extract_city(address):
+        if address is None:
+            return None
+        for region in singapore_regions:
+            if region.lower() in address.lower():
+                return region
+        match = re.search(r'(\w+)\s+Singapore', address, re.IGNORECASE)
+        return match.group(1) if match else "Unknown"
+
+    @udf(StringType())
+    def extract_pincode(address):
+        if address is None:
+            return None
+        match = re.search(r'\b(\d{6})\b', address)
+        return match.group(1) if match else None
+
+    df = df.withColumn("City", extract_city(col("Address"))) \
+           .withColumn("Pincode", extract_pincode(col("Address"))) \
+           .drop("Address")
+    return df
+
+# -------------------------------------------
+# Boolean Converter
+# -------------------------------------------
+def convert_booleans(df):
+    bool_columns = [
+        'Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
+        'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data'
+    ]
+    for colname in bool_columns:
+        if colname in df.columns:
+            df = df.withColumn(
+                colname,
+                when(lower(col(colname)).isin(["true", "1", "yes"]), True).otherwise(False)
+            )
+    return df
+
+# -------------------------------------------
+# Income Band Encoder
+# -------------------------------------------
+def encode_income_band(df):
+    mapping = {
+        '50,000 or Below': 0,
+        '50,000 to 100,000': 1,
+        '100,000 to 200,000': 2,
+        '200,000 to 300,000': 3,
+        '300,000 to 500,000': 4,
+        '500,000 or Above': 5
+    }
+
+    mapping_expr = when(col("Income_Band_SGD").isNull(), None)
+    for k, v in mapping.items():
+        mapping_expr = mapping_expr.when(col("Income_Band_SGD") == k, v)
+    df = df.withColumn("Income_Band_SGD", mapping_expr.otherwise(None))
+    return df
+
+# -------------------------------------------
+# Date Feature Extractor
+# -------------------------------------------
+def extract_date_features(df):
+    date_columns = ['Installment_Due_Date', 'Last_Payment_Date']
+    for date_col in date_columns:
+        if date_col in df.columns:
+            df = df.withColumn(date_col, to_date(col(date_col), "yyyy-MM-dd")) \
+                   .withColumn(f"{date_col}_month", month(col(date_col))) \
+                   .withColumn(f"{date_col}_dayofweek", dayofweek(col(date_col))) \
+                   .withColumn(f"{date_col}_year", year(col(date_col))) \
+                   .drop(date_col)
+    return df
+
+# -------------------------------------------
+# Digital Engagement Calculator
+# -------------------------------------------
+def calculate_digital_engagement(df):
+    required_cols = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
+    if all(c in df.columns for c in required_cols):
+        df = df.withColumn(
+            "Digital_Engagement_Score",
+            (col("App_Login_Frequency") + col("UPI_Transactions") + col("Online_Banking_Activity")) / 3
+        )
+    return df
+
+# -------------------------------------------
+# Email Validator
+# -------------------------------------------
+def validate_email(df):
+    legitimate_domains = [
         'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
         'icloud.com', 'protonmail.com', 'zoho.com', 'aol.com', 'mail.com',
         'gmail.com.sg', 'yahoo.com.sg', 'hotmail.com.sg', 'singnet.com.sg',
         'starhub.net.sg', 'pacific.net.sg'
     ]
-
-    DISPOSABLE_DOMAINS = [
-        'tempmail.com', '10minutemail.com', 'guerrillamail.com',
-        'mailinator.com', 'yopmail.com', 'trashmail.com',
-        'disposableemail.com', 'fakeinbox.com', 'temp-mail.org'
+    disposable_domains = [
+        'tempmail.com', '10minutemail.com', 'guerrillamail.com', 'mailinator.com',
+        'yopmail.com', 'trashmail.com', 'disposableemail.com', 'fakeinbox.com', 'temp-mail.org'
     ]
 
-    SG_COUNTRY_CODES = ['+65', '65', '0065']
-    EMAIL_REGEX = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    SG_PHONE_REGEX = r'^[3689]\d{7}$'
-    PINCODE_REGEX = r'\b(\d{6})\b'
-
-
-# ===========================
-# Data Quality Checks
-# ===========================
-class DataQualityChecker:
-    """Performs data quality validation"""
-
-    def __init__(self, logger: logging.Logger, config: PipelineConfig):
-        self.logger = logger
-        self.config = config
-
-    def check_schema(self, df: DataFrame, required_columns: List[str]) -> bool:
-        """Validate that required columns exist"""
-        missing = set(required_columns) - set(df.columns)
-        if missing:
-            self.logger.warning(f"Missing columns: {missing}")
-            return False
-        return True
-
-    def check_completeness(self, df: DataFrame) -> Dict[str, float]:
-        """Check data completeness for each column"""
-        total_rows = df.count()
-        if total_rows == 0:
-            raise ValueError("DataFrame is empty")
-
-        completeness = {}
-        for col in df.columns:
-            non_null = df.filter(F.col(col).isNotNull()).count()
-            completeness[col] = non_null / total_rows
-
-        self.logger.info(f"Data completeness check completed for {len(completeness)} columns")
-        return completeness
-
-    def check_duplicates(self, df: DataFrame) -> Tuple[int, float]:
-        """Check for duplicate rows"""
-        total_rows = df.count()
-        unique_rows = df.dropDuplicates().count()
-        duplicate_count = total_rows - unique_rows
-        duplicate_ratio = duplicate_count / total_rows if total_rows > 0 else 0
-
-        self.logger.info(f"Found {duplicate_count} duplicates ({duplicate_ratio:.2%})")
-
-        if duplicate_ratio > self.config.max_duplicate_ratio:
-            self.logger.warning(f"Duplicate ratio exceeds threshold: {duplicate_ratio:.2%}")
-
-        return duplicate_count, duplicate_ratio
-
-    def validate_ranges(self, df: DataFrame, numeric_cols: List[str]) -> Dict[str, Dict]:
-        """Validate numeric column ranges"""
-        stats = {}
-        for col in numeric_cols:
-            if col in df.columns:
-                col_stats = df.select(
-                    F.min(col).alias('min'),
-                    F.max(col).alias('max'),
-                    F.mean(col).alias('mean'),
-                    F.stddev(col).alias('stddev')
-                ).collect()[0].asDict()
-                stats[col] = col_stats
-
-        self.logger.info(f"Validated ranges for {len(stats)} numeric columns")
-        return stats
-
-
-# ===========================
-# UDF Definitions (Optimized)
-# ===========================
-class UDFRegistry:
-    """Registry for all user-defined functions"""
-
-    @staticmethod
-    def create_income_udf():
-        """UDF for income band encoding"""
-        def map_income(value: str) -> Optional[int]:
-            if value is None:
-                return None
-            return Constants.INCOME_MAPPING.get(value)
-        return F.udf(map_income, T.IntegerType())
-
-    @staticmethod
-    def create_bool_udf():
-        """UDF for boolean normalization"""
-        def to_bool(value) -> Optional[bool]:
-            if value is None:
-                return None
-            str_val = str(value).lower().strip()
-            return Constants.BOOL_MAPPING.get(str_val)
-        return F.udf(to_bool, T.BooleanType())
-
-    @staticmethod
-    def create_city_extraction_udf():
-        """UDF for extracting city from address"""
-        def extract_city(addr: str) -> Optional[str]:
-            if addr is None or not addr.strip():
-                return None
-
-            addr_lower = addr.lower()
-            for region in Constants.SINGAPORE_REGIONS:
-                if region.lower() in addr_lower:
-                    return region
-
-            match = re.search(r'(\w+)\s+Singapore', addr, flags=re.IGNORECASE)
-            if match:
-                return match.group(1)
-
-            return 'Unknown'
-
-        return F.udf(extract_city, T.StringType())
-
-    @staticmethod
-    def create_pincode_extraction_udf():
-        """UDF for extracting pincode"""
-        def extract_pincode(addr: str) -> Optional[str]:
-            if addr is None:
-                return None
-            match = re.search(Constants.PINCODE_REGEX, addr)
-            return match.group(1) if match else None
-
-        return F.udf(extract_pincode, T.StringType())
-
-    @staticmethod
-    def create_phone_cleaning_udf():
-        """UDF for cleaning phone numbers"""
-        def clean_phone(phone: str) -> Optional[str]:
-            if phone is None:
-                return None
-
-            cleaned = re.sub(r'[\s\-\(\)]', '', str(phone))
-            for code in Constants.SG_COUNTRY_CODES:
-                if cleaned.startswith(code):
-                    cleaned = cleaned[len(code):]
-                    break
-
-            return cleaned if cleaned else None
-
-        return F.udf(clean_phone, T.StringType())
-
-    @staticmethod
-    def create_phone_validation_udf():
-        """UDF for validating Singapore phone numbers"""
-        def validate_phone(phone: str) -> bool:
-            if phone is None:
-                return False
-            return bool(re.match(Constants.SG_PHONE_REGEX, phone))
-
-        return F.udf(validate_phone, T.BooleanType())
-
-    @staticmethod
-    def create_avg_udf():
-        """UDF for calculating average of non-null values"""
-        def avg_non_null(*values) -> Optional[float]:
-            non_null_values = [v for v in values if v is not None]
-            if not non_null_values:
-                return None
-            return sum(non_null_values) / len(non_null_values)
-
-        return F.udf(avg_non_null, T.DoubleType())
-
-
-# ===========================
-# Feature Engineering
-# ===========================
-class FeatureEngineer:
-    """Handles all feature engineering operations"""
-
-    def __init__(self, logger: logging.Logger):
-        self.logger = logger
-        self.udf_registry = UDFRegistry()
-
-    def process_address(self, df: DataFrame) -> DataFrame:
-        """Extract city and pincode from address"""
-        if "Address" not in df.columns:
-            self.logger.warning("Address column not found, skipping address processing")
-            return df
-
-        self.logger.info("Processing address features")
-        city_udf = self.udf_registry.create_city_extraction_udf()
-        pincode_udf = self.udf_registry.create_pincode_extraction_udf()
-
-        df = (df
-              .withColumn("City", city_udf(F.col("Address")))
-              .withColumn("Pincode", pincode_udf(F.col("Address")))
-              .drop("Address"))
-
-        return df
-
-    def process_phone_numbers(self, df: DataFrame) -> DataFrame:
-        """Clean and validate phone numbers"""
-        phone_cols = ["Primary_Phone_Number", "Secondary_Mobile_Number", "Landline_Phone_Number"]
-        existing_phone_cols = [c for c in phone_cols if c in df.columns]
-
-        if not existing_phone_cols:
-            self.logger.warning("No phone columns found")
-            return df
-
-        self.logger.info(f"Processing {len(existing_phone_cols)} phone columns")
-        clean_udf = self.udf_registry.create_phone_cleaning_udf()
-        validate_udf = self.udf_registry.create_phone_validation_udf()
-
-        for col in existing_phone_cols:
-            df = (df
-                  .withColumn(col, clean_udf(F.col(col)))
-                  .withColumn(f"{col}_Valid", validate_udf(F.col(col))))
-
-        return df
-
-    def process_email(self, df: DataFrame) -> DataFrame:
-        """Process email features"""
-        if "Email_ID" not in df.columns:
-            self.logger.warning("Email_ID column not found")
-            return df
-
-        self.logger.info("Processing email features")
-
-        # Email validation
-        email_valid_expr = F.col("Email_ID").rlike(Constants.EMAIL_REGEX)
-
-        # Extract domain
-        extract_domain_expr = F.when(
-            (F.col("Email_ID").isNotNull()) & (F.instr(F.col("Email_ID"), "@") > 0),
-            F.lower(F.substring_index("Email_ID", "@", -1))
-        ).otherwise(F.lit(None))
-
-        # Domain classification
-        domain_col = "Email_Domain"
-
-        df = (df
-              .withColumn("Email_Valid_Format", email_valid_expr.cast(T.BooleanType()))
-              .withColumn(domain_col, extract_domain_expr)
-              .withColumn("Email_Domain_Legitimate",
-                         F.col(domain_col).isin(Constants.LEGITIMATE_DOMAINS))
-              .withColumn("Email_Disposable",
-                         F.col(domain_col).isin(Constants.DISPOSABLE_DOMAINS)))
-
-        return df
-
-    def normalize_booleans(self, df: DataFrame) -> DataFrame:
-        """Normalize boolean columns"""
-        bool_columns = [
-            'Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
-            'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data'
-        ]
-        existing_bool_cols = [c for c in bool_columns if c in df.columns]
-
-        if not existing_bool_cols:
-            return df
-
-        self.logger.info(f"Normalizing {len(existing_bool_cols)} boolean columns")
-        bool_udf = self.udf_registry.create_bool_udf()
-
-        for col in existing_bool_cols:
-            df = df.withColumn(col, bool_udf(F.col(col)))
-
-        return df
-
-    def encode_income_band(self, df: DataFrame) -> DataFrame:
-        """Encode income band to ordinal values"""
-        if "Income_Band_SGD" not in df.columns:
-            return df
-
-        self.logger.info("Encoding income band")
-        income_udf = self.udf_registry.create_income_udf()
-        df = df.withColumn("Income_Band_SGD", income_udf(F.col("Income_Band_SGD")))
-
-        return df
-
-    def extract_date_features(self, df: DataFrame) -> DataFrame:
-        """Extract features from date columns"""
-        date_cols = ['Installment_Due_Date', 'Last_Payment_Date']
-        existing_date_cols = [c for c in date_cols if c in df.columns]
-
-        if not existing_date_cols:
-            return df
-
-        self.logger.info(f"Extracting features from {len(existing_date_cols)} date columns")
-
-        for col in existing_date_cols:
-            df = (df
-                  .withColumn(col, F.to_timestamp(F.col(col)))
-                  .withColumn(f"{col}_month", F.month(F.col(col)))
-                  .withColumn(f"{col}_dayofweek", F.dayofweek(F.col(col)))
-                  .withColumn(f"{col}_year", F.year(F.col(col)))
-                  .withColumn(f"{col}_quarter", F.quarter(F.col(col)))
-                  .drop(col))
-
-        return df
-
-    def create_engagement_score(self, df: DataFrame) -> DataFrame:
-        """Create digital engagement score"""
-        engagement_cols = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
-
-        if not all(c in df.columns for c in engagement_cols):
-            self.logger.warning("Not all engagement columns found, skipping engagement score")
-            return df
-
-        self.logger.info("Creating digital engagement score")
-        avg_udf = self.udf_registry.create_avg_udf()
-
-        df = df.withColumn(
-            "Digital_Engagement_Score",
-            avg_udf(*[F.col(c) for c in engagement_cols])
-        )
-
-        return df
-
-    def create_derived_features(self, df: DataFrame) -> DataFrame:
-        """Create additional derived features"""
-        self.logger.info("Creating derived features")
-
-        # Payment ratio
-        if all(c in df.columns for c in ['Amount_Paid_Each_Month_SGD', 'Current_EMI_SGD']):
-            df = df.withColumn(
-                "Payment_Ratio",
-                F.when(F.col("Current_EMI_SGD") > 0,
-                      F.col("Amount_Paid_Each_Month_SGD") / F.col("Current_EMI_SGD"))
-                .otherwise(F.lit(None))
-            )
-
-        # Loan utilization
-        if all(c in df.columns for c in ['Outstanding_Balance_SGD', 'Loan_Amount_SGD']):
-            df = df.withColumn(
-                "Loan_Utilization",
-                F.when(F.col("Loan_Amount_SGD") > 0,
-                      F.col("Outstanding_Balance_SGD") / F.col("Loan_Amount_SGD"))
-                .otherwise(F.lit(None))
-            )
-
-        # Contact responsiveness
-        if all(c in df.columns for c in ['Contact_History_Call_Attempts', 'Response_Outcome']):
-            df = df.withColumn(
-                "Contact_Success_Rate",
-                F.when(F.col("Contact_History_Call_Attempts") > 0,
-                      F.when(F.col("Response_Outcome").isin(['Answered', 'Committed']), 1.0)
-                      .otherwise(0.0))
-                .otherwise(F.lit(None))
-            )
-
-        return df
-
-
-# ===========================
-# ML Pipeline Builder
-# ===========================
-class MLPipelineBuilder:
-    """Builds the machine learning preprocessing pipeline"""
-
-    def __init__(self, logger: logging.Logger):
-        self.logger = logger
-
-    def get_column_lists(self, df: DataFrame) -> Tuple[List[str], List[str]]:
-        """Get lists of numeric and categorical columns"""
-        numeric_candidates = [
-            'Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
-            'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
-            'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
-            'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
-            'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
-            'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
-            'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
-            'Income_Band_SGD', 'Digital_Engagement_Score', 'Payment_Ratio',
-            'Loan_Utilization', 'Contact_Success_Rate',
-            'Installment_Due_Date_month', 'Installment_Due_Date_dayofweek',
-            'Installment_Due_Date_year', 'Installment_Due_Date_quarter',
-            'Last_Payment_Date_month', 'Last_Payment_Date_dayofweek',
-            'Last_Payment_Date_year', 'Last_Payment_Date_quarter'
-        ]
-
-        categorical_candidates = [
-            'Product_Type', 'Payment_Frequency', 'Settlement_History',
-            'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
-            'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
-            'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
-            'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
-            'Gender', 'Occupation', 'Employeement_Type', 'City', 'Pincode', 'Email_Domain'
-        ]
-
-        numeric_cols = [c for c in numeric_candidates if c in df.columns]
-        categorical_cols = [c for c in categorical_candidates if c in df.columns]
-
-        self.logger.info(f"Identified {len(numeric_cols)} numeric and {len(categorical_cols)} categorical columns")
-
-        return numeric_cols, categorical_cols
-
-    def build_pipeline(self, df: DataFrame) -> Pipeline:
-        """Build the complete ML preprocessing pipeline"""
-        numeric_cols, categorical_cols = self.get_column_lists(df)
-
-        if not numeric_cols and not categorical_cols:
-            raise ValueError("No valid columns found for pipeline")
-
-        stages = []
-
-        # Numeric imputation and scaling
-        if numeric_cols:
-            self.logger.info(f"Adding imputation for {len(numeric_cols)} numeric columns")
-            imputer = Imputer(
-                inputCols=numeric_cols,
-                outputCols=[f"imputed_{c}" for c in numeric_cols],
-                strategy="median"
-            )
-            stages.append(imputer)
-
-        # Categorical indexing and encoding
-        if categorical_cols:
-            self.logger.info(f"Adding indexing and encoding for {len(categorical_cols)} categorical columns")
-
-            indexers = [
-                StringIndexer(
-                    inputCol=c,
-                    outputCol=f"idx_{c}",
-                    handleInvalid="keep",
-                    stringOrderType="frequencyDesc"
-                )
-                for c in categorical_cols
-            ]
-            stages.extend(indexers)
-
-            ohe = OneHotEncoder(
-                inputCols=[f"idx_{c}" for c in categorical_cols],
-                outputCols=[f"ohe_{c}" for c in categorical_cols],
-                handleInvalid="keep",
-                dropLast=True
-            )
-            stages.append(ohe)
-
-        # Feature assembly
-        assembler_inputs = []
-        if numeric_cols:
-            assembler_inputs.extend([f"imputed_{c}" for c in numeric_cols])
-        if categorical_cols:
-            assembler_inputs.extend([f"ohe_{c}" for c in categorical_cols])
-
-        self.logger.info(f"Assembling {len(assembler_inputs)} feature columns")
-        assembler = VectorAssembler(
-            inputCols=assembler_inputs,
-            outputCol="features",
-            handleInvalid="keep"
-        )
-        stages.append(assembler)
-
-        # Feature scaling
-        scaler = StandardScaler(
-            inputCol="features",
-            outputCol="features_scaled",
-            withMean=False,
-            withStd=True
-        )
-        stages.append(scaler)
-
-        return Pipeline(stages=stages)
-
-
-# ===========================
-# Main Pipeline Class
-# ===========================
-class SingaporeLoanPipeline:
-    """Main pipeline orchestrator"""
-
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-        self.logger = setup_logging(config.log_level)
-        self.spark = self._create_spark_session()
-        self.quality_checker = DataQualityChecker(self.logger, config)
-        self.feature_engineer = FeatureEngineer(self.logger)
-        self.pipeline_builder = MLPipelineBuilder(self.logger)
-
-    def _create_spark_session(self) -> SparkSession:
-        """Create and configure Spark session"""
-        self.logger.info("Creating Spark session")
-        builder = SparkSession.builder.appName("SingaporeLoanDataPipeline")
-
-        for key, value in self.config.spark_configs.items():
-            builder = builder.config(key, value)
-
-        return builder.getOrCreate()
-
-    def load_data(self) -> DataFrame:
-        """Load data with error handling"""
-        try:
-            self.logger.info(f"Loading data from {self.config.input_path}")
-
-            if not Path(self.config.input_path).exists():
-                raise FileNotFoundError(f"Input file not found: {self.config.input_path}")
-
-            df = (self.spark.read
-                  .option("header", True)
-                  .option("inferSchema", True)
-                  .option("mode", "PERMISSIVE")
-                  .csv(self.config.input_path))
-
-            row_count = df.count()
-            col_count = len(df.columns)
-            self.logger.info(f"Loaded {row_count} rows and {col_count} columns")
-
-            if row_count == 0:
-                raise ValueError("Loaded DataFrame is empty")
-
-            return df
-
-        except Exception as e:
-            self.logger.error(f"Error loading data: {str(e)}")
-            raise
-
-    def preprocess_data(self, df: DataFrame) -> DataFrame:
-        """Apply all preprocessing steps"""
-        try:
-            self.logger.info("Starting data preprocessing")
-
-            # Data quality checks
-            self.quality_checker.check_duplicates(df)
-            completeness = self.quality_checker.check_completeness(df)
-
-            # Feature engineering
-            df = self.feature_engineer.process_address(df)
-            df = self.feature_engineer.process_phone_numbers(df)
-            df = self.feature_engineer.process_email(df)
-            df = self.feature_engineer.normalize_booleans(df)
-            df = self.feature_engineer.encode_income_band(df)
-            df = self.feature_engineer.extract_date_features(df)
-            df = self.feature_engineer.create_engagement_score(df)
-            df = self.feature_engineer.create_derived_features(df)
-
-            # Remove duplicates
-            original_count = df.count()
-            df = df.dropDuplicates()
-            dedupe_count = df.count()
-            self.logger.info(f"Removed {original_count - dedupe_count} duplicate rows")
-
-            return df
-
-        except Exception as e:
-            self.logger.error(f"Error in preprocessing: {str(e)}")
-            raise
-
-    def build_and_fit_pipeline(self, df: DataFrame) -> Tuple[PipelineModel, DataFrame]:
-        """Build and fit the ML pipeline"""
-        try:
-            self.logger.info("Building ML pipeline")
-            pipeline = self.pipeline_builder.build_pipeline(df)
-
-            self.logger.info("Fitting pipeline")
-            model = pipeline.fit(df)
-
-            self.logger.info("Transforming data")
-            processed_df = model.transform(df)
-
-            return model, processed_df
-
-        except Exception as e:
-            self.logger.error(f"Error in pipeline building/fitting: {str(e)}")
-            raise
-
-    def save_outputs(self, model: PipelineModel, df: DataFrame):
-        """Save processed data and model"""
-        try:
-            # Save processed data
-            self.logger.info(f"Saving processed data to {self.config.output_path}")
-            df.write.mode("overwrite").parquet(self.config.output_path)
-
-            # Save model
-            self.logger.info(f"Saving pipeline model to {self.config.model_path}")
-            model.write().overwrite().save(self.config.model_path)
-
-            self.logger.info("Outputs saved successfully")
-
-        except Exception as e:
-            self.logger.error(f"Error saving outputs: {str(e)}")
-            raise
-
-    def run(self):
-        """Execute the complete pipeline"""
-        try:
-            self.logger.info("="*50)
-            self.logger.info("Starting Singapore Loan Data Pipeline")
-            self.logger.info("="*50)
-
-            # Load data
-            df = self.load_data()
-
-            # Preprocess
-            df = self.preprocess_data(df)
-
-            # Build and fit pipeline
-            model, processed_df = self.build_and_fit_pipeline(df)
-
-            # Save outputs
-            self.save_outputs(model, processed_df)
-
-            # Final validation
-            final_count = processed_df.count()
-            self.logger.info(f"Pipeline completed successfully. Final row count: {final_count}")
-
-            # Show sample
-            self.logger.info("Sample of processed data:")
-            sample_cols = [c for c in ["City", "Pincode", "Email_Valid_Format", "features_scaled"]
-                          if c in processed_df.columns]
-            if sample_cols:
-                processed_df.select(sample_cols).show(5, truncate=False)
-
-            self.logger.info("="*50)
-            self.logger.info("Pipeline execution completed")
-            self.logger.info("="*50)
-
-        except Exception as e:
-            self.logger.error(f"Pipeline failed: {str(e)}")
-            raise
-        finally:
-            self.spark.stop()
-
-
-# ===========================
-# Entry Point
-# ===========================
-if __name__ == "__main__":
-    # Configuration
-    config = PipelineConfig(
-        input_path="singapore_loan_data.csv",
-        output_path="processed_data.parquet",
-        model_path="pipeline_model",
-        log_level="INFO"
-    )
-
-    # Run pipeline
-    pipeline = SingaporeLoanPipeline(config)
-    pipeline.run()
+    @udf(BooleanType())
+    def email_valid(email):
+        return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email or ''))
+
+    @udf(StringType())
+    def email_domain(email):
+        if email and '@' in email:
+            return email.split('@')[1].lower()
+        return None
+
+    @udf(BooleanType())
+    def domain_legitimate(domain):
+        return domain in legitimate_domains if domain else False
+
+    @udf(BooleanType())
+    def domain_disposable(domain):
+        return domain in disposable_domains if domain else False
+
+    df = df.withColumn("Email_Valid_Format", email_valid(col("Email_ID"))) \
+           .withColumn("Email_Domain", email_domain(col("Email_ID"))) \
+           .withColumn("Email_Domain_Legitimate", domain_legitimate(col("Email_Domain"))) \
+           .withColumn("Email_Disposable", domain_disposable(col("Email_Domain")))
+    return df
+
+# -------------------------------------------
+# Pipeline Runner
+# -------------------------------------------
+def run_pipeline(file_path, save_path=None):
+    df = load_data(file_path)
+    df = process_address(df)
+    df = convert_booleans(df)
+    df = encode_income_band(df)
+    df = extract_date_features(df)
+    df = calculate_digital_engagement(df)
+    df = validate_email(df)
+    df = df.dropDuplicates()
+
+    print(f"Processed DataFrame shape: ({df.count()}, {len(df.columns)})")
+
+    if save_path:
+        df.write.mode("overwrite").option("header", True).csv(save_path)
+        print(f"Processed data saved at: {save_path}")
+
+    return df
+
+# -------------------------------------------
+# Run the PySpark pipeline
+# -------------------------------------------
+if _name_ == "_main_":
+    processed_df = run_pipeline("singapore_loan_data.csv", save_path="processed_data_spark")
+    processed_df.show(10, truncate=False)
