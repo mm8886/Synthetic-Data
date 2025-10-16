@@ -48,8 +48,12 @@ class IncomeBandEncoder(Transformer):
             '500,000 or Above': 5
         }
         
-        # Create mapping expression
-        mapping_expr = create_map([lit(x) for x in sum(income_mapping.items(), ())])
+        # Fixed the mapping expression - use list comprehension instead of sum
+        mapping_items = []
+        for k, v in income_mapping.items():
+            mapping_items.extend([lit(k), lit(v)])
+        
+        mapping_expr = create_map(mapping_items)
         
         if 'Income_Band_SGD' in df.columns:
             df = df.withColumn('Income_Band_SGD', 
@@ -259,7 +263,6 @@ class DataLoader(Transformer):
             return df_loaded
         except Exception as e:
             print(f"Error loading data: {e}")
-            # Return empty dataframe with sample schema
             return spark.createDataFrame([], StructType([]))
 
 class PysparkDataPipeline:
@@ -432,68 +435,57 @@ class PysparkDataPipeline:
         if hasattr(self, 'spark'):
             self.spark.stop()
 
-# Example usage with proper error handling
+# Example usage
 if __name__ == "__main__":
-    try:
-        print("Initializing PySpark Data Pipeline...")
+    print("Initializing PySpark Data Pipeline...")
+    
+    # Initialize the PySpark pipeline
+    pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
+
+    # Run the complete pipeline
+    processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
+
+    if processed_data is not None:
+        # Display results
+        print("\n" + "="*50)
+        print("PIPELINE SUMMARY")
+        print("="*50)
+        print(f"Processed data count: {processed_data.count():,}")
+        print(f"Processed data columns: {len(processed_data.columns)}")
+
+        print("\nSample of processed data:")
+        processed_data.show(5, truncate=False)
+
+        print("\nData types after processing:")
+        processed_data.printSchema()
+
+        # Show the new columns created by the data cleaning processes
+        new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
+                       'Email_Domain_Legitimate', 'Email_Disposable']
+
+        print("\nNew columns created by data cleaning:")
+        for col in new_columns:
+            if col in processed_data.columns:
+                non_null_count = processed_data.filter(col(col).isNotNull()).count()
+                print(f"  {col}: {non_null_count:,} non-null values")
+
+        # Show phone number validation results
+        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
+        print("\nPhone number validation results:")
+        for col in phone_columns:
+            valid_col = f'{col}_Valid'
+            if valid_col in processed_data.columns:
+                valid_count = processed_data.filter(col(valid_col) == True).count()
+                total_count = processed_data.filter(col(valid_col).isNotNull()).count()
+                print(f"  {valid_col}: {valid_count:,}/{total_count:,} valid numbers")
         
-        # Initialize the PySpark pipeline
-        pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
-
-        # Run the complete pipeline
-        processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
-
-        if processed_data is not None:
-            # Display results
-            print("\n" + "="*50)
-            print("PIPELINE SUMMARY")
-            print("="*50)
-            print(f"Processed data count: {processed_data.count():,}")
-            print(f"Processed data columns: {len(processed_data.columns)}")
-
-            print("\nSample of processed data:")
-            processed_data.show(5, truncate=False)
-
-            print("\nData types after processing:")
-            processed_data.printSchema()
-
-            # Show the new columns created by the data cleaning processes
-            new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
-                           'Email_Domain_Legitimate', 'Email_Disposable']
-
-            print("\nNew columns created by data cleaning:")
-            for col in new_columns:
-                if col in processed_data.columns:
-                    non_null_count = processed_data.filter(col(col).isNotNull()).count()
-                    print(f"  {col}: {non_null_count:,} non-null values")
-
-            # Show phone number validation results
-            phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-            print("\nPhone number validation results:")
-            for col in phone_columns:
-                valid_col = f'{col}_Valid'
-                if valid_col in processed_data.columns:
-                    valid_count = processed_data.filter(col(valid_col) == True).count()
-                    total_count = processed_data.filter(col(valid_col).isNotNull()).count()
-                    print(f"  {valid_col}: {valid_count:,}/{total_count:,} valid numbers")
+        # Show email validation results
+        if 'Email_Valid_Format' in processed_data.columns:
+            valid_emails = processed_data.filter(col('Email_Valid_Format') == True).count()
+            total_emails = processed_data.filter(col('Email_ID').isNotNull()).count()
+            print(f"\nEmail validation: {valid_emails:,}/{total_emails:,} valid emails")
             
-            # Show email validation results
-            if 'Email_Valid_Format' in processed_data.columns:
-                valid_emails = processed_data.filter(col('Email_Valid_Format') == True).count()
-                total_emails = processed_data.filter(col('Email_ID').isNotNull()).count()
-                print(f"\nEmail validation: {valid_emails:,}/{total_emails:,} valid emails")
-                
-        else:
-            print("Pipeline failed to process data.")
+    else:
+        print("Pipeline failed to process data.")
 
-    except Exception as e:
-        print(f"Failed to run pipeline: {e}")
-        print("\nTroubleshooting steps:")
-        print("1. Check if the data file 'singapore_loan_data.csv' exists")
-        print("2. Verify Java is installed and JAVA_HOME is set correctly")
-        print("3. Check if PySpark is properly installed")
-        import traceback
-        traceback.print_exc()
-
-    finally:
-        print("\nPipeline execution completed.")
+    print("\nPipeline execution completed.")
