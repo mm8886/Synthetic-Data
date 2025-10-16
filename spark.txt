@@ -8,6 +8,7 @@ from pyspark.sql import DataFrame
 import re
 import warnings
 from datetime import datetime
+from itertools import chain
 
 warnings.filterwarnings('ignore')
 
@@ -52,7 +53,12 @@ class IncomeBandEncoder(Transformer):
 
     def _transform(self, df):
         if 'Income_Band_SGD' in df.columns:
-            mapping_expr = create_map([lit(x) for x in sum(self.income_mapping.items(), ())])
+            # Create mapping expression using chain to flatten the dictionary items
+            mapping_list = []
+            for key, value in self.income_mapping.items():
+                mapping_list.extend([lit(key), lit(value)])
+            
+            mapping_expr = create_map(mapping_list)
             return df.withColumn('Income_Band_SGD', mapping_expr[col('Income_Band_SGD')])
         return df
 
@@ -237,11 +243,13 @@ class DataLoader(Transformer):
     def _transform(self, df):
         print("Loading data...")
         try:
-            df = spark.read.csv(self.file_path, header=True, inferSchema=True)
-            print(f"Successfully loaded {df.count():,} rows")
-            return df
+            # Read the CSV file
+            df_loaded = spark.read.csv(self.file_path, header=True, inferSchema=True)
+            print(f"Successfully loaded {df_loaded.count():,} rows")
+            return df_loaded
         except Exception as e:
             print(f"Error loading data: {e}")
+            # Return empty DataFrame with expected structure
             return spark.createDataFrame([], StructType([]))
 
 class PySparkDataPipeline:
@@ -253,27 +261,25 @@ class PySparkDataPipeline:
         self.categorical_columns = []
         self._build_pipeline()
 
-    def _get_numeric_columns(self, df):
+    def _get_numeric_columns(self):
         """Define numeric columns for preprocessing"""
-        numeric_cols = ['Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
-                       'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
-                       'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
-                       'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
-                       'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
-                       'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
-                       'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
-                       'Income_Band_SGD', 'Digital_Engagement_Score']
-        return [col for col in numeric_cols if col in df.columns]
+        return ['Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
+                'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
+                'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
+                'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
+                'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
+                'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
+                'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
+                'Income_Band_SGD', 'Digital_Engagement_Score']
 
-    def _get_categorical_columns(self, df):
+    def _get_categorical_columns(self):
         """Define categorical columns for preprocessing"""
-        categorical_cols = ['Product_Type', 'Payment_Frequency', 'Settlement_History',
-                          'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
-                          'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
-                          'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
-                          'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
-                          'Gender', 'Occupation', 'Employeement_Type']
-        return [col for col in categorical_cols if col in df.columns]
+        return ['Product_Type', 'Payment_Frequency', 'Settlement_History',
+                'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
+                'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
+                'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
+                'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
+                'Gender', 'Occupation', 'Employeement_Type']
 
     def _get_date_columns(self):
         """Define date columns for processing"""
@@ -299,31 +305,32 @@ class PySparkDataPipeline:
         print("=" * 50)
 
         try:
-            # Fit the pipeline
+            # Fit the pipeline on empty DataFrame to initialize
             pipeline_model = self.pipeline.fit(spark.createDataFrame([], StructType([])))
             
-            # Transform the data
+            # Transform the actual data
             self.processed_data = pipeline_model.transform(spark.createDataFrame([], StructType([])))
             
             # Cache the processed data for faster access
             self.processed_data.cache()
             
-            # Get column lists after transformations
-            self.numeric_columns = self._get_numeric_columns(self.processed_data)
-            self.categorical_columns = self._get_categorical_columns(self.processed_data)
-
+            original_count = self.processed_data.count()
+            print(f"Data loaded and transformed: {original_count:,} rows")
+            
             # Apply additional preprocessing
             self._apply_standard_preprocessing()
 
             # Remove duplicates
             self.processed_data = self.processed_data.dropDuplicates()
+            final_count = self.processed_data.count()
+            print(f"After removing duplicates: {final_count:,} rows")
 
             # Save if path provided
             if save_path:
                 self.save_processed_data(save_path)
 
             print("Pipeline completed successfully!")
-            print(f"Processed shape: ({self.processed_data.count():,}, {len(self.processed_data.columns)})")
+            print(f"Final processed shape: ({self.processed_data.count():,}, {len(self.processed_data.columns)})")
 
             return self.processed_data
 
@@ -335,82 +342,108 @@ class PySparkDataPipeline:
 
     def _apply_standard_preprocessing(self):
         """Apply standard preprocessing to numeric and categorical columns"""
+        # Get current columns after transformations
+        current_columns = self.processed_data.columns
+        
+        # Filter numeric and categorical columns that actually exist in the DataFrame
+        self.numeric_columns = [col for col in self._get_numeric_columns() if col in current_columns]
+        self.categorical_columns = [col for col in self._get_categorical_columns() if col in current_columns]
+        
+        print(f"Processing {len(self.numeric_columns)} numeric columns")
+        print(f"Processing {len(self.categorical_columns)} categorical columns")
+
         # Handle numeric columns
         if self.numeric_columns:
-            # Impute numeric columns
-            numeric_imputer = Imputer(
-                inputCols=self.numeric_columns,
-                outputCols=[f"{col}_imputed" for col in self.numeric_columns],
-                strategy="median"
-            )
+            print("Applying numeric preprocessing...")
             
-            # Scale numeric columns
+            # First, handle null values in numeric columns
+            for col_name in self.numeric_columns:
+                self.processed_data = self.processed_data.fillna(0, subset=[col_name])
+
+            # Use VectorAssembler for numeric columns
             assembler = VectorAssembler(
-                inputCols=[f"{col}_imputed" for col in self.numeric_columns],
+                inputCols=self.numeric_columns,
                 outputCol="numeric_features"
             )
             
+            # Scale numeric columns
             scaler = StandardScaler(
                 inputCol="numeric_features",
-                outputCol="scaled_features",
+                outputCol="scaled_numeric_features",
                 withStd=True,
                 withMean=True
             )
             
-            # Create pipeline for numeric preprocessing
-            numeric_pipeline = Pipeline(stages=[numeric_imputer, assembler, scaler])
-            numeric_model = numeric_pipeline.fit(self.processed_data)
-            self.processed_data = numeric_model.transform(self.processed_data)
+            # Apply numeric preprocessing
+            self.processed_data = assembler.transform(self.processed_data)
+            scaler_model = scaler.fit(self.processed_data)
+            self.processed_data = scaler_model.transform(self.processed_data)
             
-            # Drop intermediate columns
-            cols_to_drop = self.numeric_columns + [f"{col}_imputed" for col in self.numeric_columns] + ["numeric_features"]
-            self.processed_data = self.processed_data.drop(*cols_to_drop)
+            # Drop original numeric columns and intermediate features
+            self.processed_data = self.processed_data.drop(*self.numeric_columns)
+            self.processed_data = self.processed_data.drop("numeric_features")
 
         # Handle categorical columns
         if self.categorical_columns:
-            # String index categorical columns
-            indexers = [
-                StringIndexer(inputCol=col, outputCol=f"{col}_indexed", handleInvalid="keep")
-                for col in self.categorical_columns
-            ]
+            print("Applying categorical preprocessing...")
             
+            # Handle null values in categorical columns
+            for col_name in self.categorical_columns:
+                self.processed_data = self.processed_data.fillna("Unknown", subset=[col_name])
+
+            # String index categorical columns
+            indexers = []
+            indexed_columns = []
+            
+            for col_name in self.categorical_columns:
+                indexed_col = f"{col_name}_indexed"
+                indexer = StringIndexer(
+                    inputCol=col_name, 
+                    outputCol=indexed_col, 
+                    handleInvalid="keep"
+                )
+                indexers.append(indexer)
+                indexed_columns.append(indexed_col)
+
+            # Fit and transform indexers
+            for indexer in indexers:
+                indexer_model = indexer.fit(self.processed_data)
+                self.processed_data = indexer_model.transform(self.processed_data)
+
             # One-hot encode indexed columns
             encoder = OneHotEncoder(
-                inputCols=[f"{col}_indexed" for col in self.categorical_columns],
+                inputCols=indexed_columns,
                 outputCols=[f"{col}_encoded" for col in self.categorical_columns]
             )
             
-            # Create pipeline for categorical preprocessing
-            categorical_pipeline = Pipeline(stages=indexers + [encoder])
-            categorical_model = categorical_pipeline.fit(self.processed_data)
-            self.processed_data = categorical_model.transform(self.processed_data)
+            encoder_model = encoder.fit(self.processed_data)
+            self.processed_data = encoder_model.transform(self.processed_data)
             
-            # Drop intermediate columns
-            cols_to_drop = self.categorical_columns + [f"{col}_indexed" for col in self.categorical_columns]
-            self.processed_data = self.processed_data.drop(*cols_to_drop)
+            # Drop original categorical and intermediate indexed columns
+            columns_to_drop = self.categorical_columns + indexed_columns
+            self.processed_data = self.processed_data.drop(*columns_to_drop)
 
     def save_processed_data(self, path):
         """Save the processed data"""
         if self.processed_data is not None:
-            self.processed_data.write.mode("overwrite").parquet(path)
+            # Use coalesce to reduce the number of partitions for writing
+            self.processed_data.coalesce(1).write.mode("overwrite").parquet(path)
             print(f"Processed data saved to {path}")
-
-            # Also save the pipeline model for future use
-            pipeline_model = self.pipeline.fit(spark.createDataFrame([], StructType([])))
-            pipeline_model.write().overwrite().save("pyspark_data_pipeline_model")
-            print("Pipeline model saved as 'pyspark_data_pipeline_model'")
 
     def load_and_transform_new_data(self, new_data_path):
         """Load and transform new data using the fitted pipeline"""
-        # Load new data
-        new_df = spark.read.csv(new_data_path, header=True, inferSchema=True)
-        
-        # Load the saved pipeline model
-        from pyspark.ml import PipelineModel
-        pipeline_model = PipelineModel.load("pyspark_data_pipeline_model")
-        
-        # Transform new data
-        return pipeline_model.transform(new_df)
+        try:
+            # Load new data
+            new_df = spark.read.csv(new_data_path, header=True, inferSchema=True)
+            
+            # Fit pipeline on empty DataFrame and transform new data
+            pipeline_model = self.pipeline.fit(spark.createDataFrame([], StructType([])))
+            transformed_df = pipeline_model.transform(new_df)
+            
+            return transformed_df
+        except Exception as e:
+            print(f"Error transforming new data: {e}")
+            return None
 
 # Example usage
 if __name__ == "__main__":
@@ -426,9 +459,9 @@ if __name__ == "__main__":
         print(f"Processed data shape: ({processed_data.count():,}, {len(processed_data.columns)})")
 
         print("\nSample of processed data:")
-        processed_data.show(5)
+        processed_data.show(5, truncate=False)
 
-        print("\nData types after processing:")
+        print("\nData schema after processing:")
         processed_data.printSchema()
 
         # Show the new columns created by the data cleaning processes
@@ -449,6 +482,10 @@ if __name__ == "__main__":
                 valid_count = processed_data.filter(col(valid_col) == True).count()
                 total_count = processed_data.count()
                 print(f"{valid_col}: {valid_count:,}/{total_count:,} valid numbers")
+                
+        # Show memory usage
+        print(f"\nNumber of partitions: {processed_data.rdd.getNumPartitions()}")
+        
     else:
         print("Pipeline failed to process data.")
 
