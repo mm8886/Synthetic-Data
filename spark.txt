@@ -9,14 +9,8 @@ from pyspark.sql import DataFrame
 import re
 from datetime import datetime
 import warnings
-import os
-import sys
 
 warnings.filterwarnings('ignore')
-
-# Set Java path (adjust based on your Java installation)
-os.environ['JAVA_HOME'] = 'C:/Program Files/Java/jdk-11'  # Update this path
-os.environ['PATH'] = f"{os.environ['JAVA_HOME']}/bin;{os.environ['PATH']}"
 
 # Custom PySpark transformers
 class DateFeatureExtractor(Transformer):
@@ -27,14 +21,14 @@ class DateFeatureExtractor(Transformer):
 
     def _transform(self, df):
         result_df = df
-        for col_name in self.date_columns:
-            if col_name in df.columns:
+        for col in self.date_columns:
+            if col in df.columns:
                 result_df = (result_df
-                    .withColumn(col_name, to_date(col(col_name), "yyyy-MM-dd"))
-                    .withColumn(f'{col_name}_month', month(col(col_name)))
-                    .withColumn(f'{col_name}_dayofweek', dayofweek(col(col_name)))
-                    .withColumn(f'{col_name}_year', year(col(col_name)))
-                    .drop(col_name)
+                    .withColumn(col, to_date(col(col), "yyyy-MM-dd"))
+                    .withColumn(f'{col}_month', month(col(col)))
+                    .withColumn(f'{col}_dayofweek', dayofweek(col(col)))
+                    .withColumn(f'{col}_year', year(col(col)))
+                    .drop(col)
                 )
         return result_df
 
@@ -53,7 +47,6 @@ class IncomeBandEncoder(Transformer):
             '500,000 or Above': 5
         }
         
-        # Create mapping expression
         mapping_expr = create_map([lit(x) for x in sum(income_mapping.items(), ())])
         
         if 'Income_Band_SGD' in df.columns:
@@ -264,7 +257,6 @@ class DataLoader(Transformer):
             return df_loaded
         except Exception as e:
             print(f"Error loading data: {e}")
-            # Return empty dataframe with sample schema
             return spark.createDataFrame([], StructType([]))
 
 class PysparkDataPipeline:
@@ -272,21 +264,7 @@ class PysparkDataPipeline:
         self.file_path = file_path
         self.pipeline = None
         self.processed_data = None
-        # Create Spark session with error handling
-        try:
-            self.spark = SparkSession.builder \
-                .appName("SingaporeLoanDataPipeline") \
-                .config("spark.sql.adaptive.enabled", "true") \
-                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-                .config("spark.driver.memory", "2g") \
-                .config("spark.executor.memory", "2g") \
-                .getOrCreate()
-            self.spark.sparkContext.setLogLevel("ERROR")
-        except Exception as e:
-            print(f"Error creating Spark session: {e}")
-            print("Please make sure Java is installed and JAVA_HOME is set correctly.")
-            raise e
-        
+        self.spark = SparkSession.builder.appName("DataPipeline").getOrCreate()
         self._build_pipeline()
 
     def _get_numeric_columns(self):
@@ -333,25 +311,15 @@ class PysparkDataPipeline:
         
         # Handle missing values for numeric columns
         for col_name in numeric_features:
-            if col_name in df.columns:
-                try:
-                    median_val = df.approxQuantile(col_name, [0.5], 0.01)[0]
-                    df = df.fillna({col_name: median_val})
-                except:
-                    df = df.fillna({col_name: 0})
+            median_val = df.approxQuantile(col_name, [0.5], 0.01)[0]
+            df = df.fillna({col_name: median_val})
         
         # Handle missing values for categorical columns
         for col_name in categorical_features:
-            if col_name in df.columns:
-                try:
-                    mode_row = df.groupBy(col_name).count().orderBy(col("count").desc()).first()
-                    if mode_row:
-                        mode_val = mode_row[0]
-                        df = df.fillna({col_name: mode_val})
-                    else:
-                        df = df.fillna({col_name: "Unknown"})
-                except:
-                    df = df.fillna({col_name: "Unknown"})
+            mode_row = df.groupBy(col_name).count().orderBy(col("count").desc()).first()
+            if mode_row:
+                mode_val = mode_row[0]
+                df = df.fillna({col_name: mode_val})
         
         # One-hot encode categorical variables
         indexers = []
@@ -372,11 +340,8 @@ class PysparkDataPipeline:
             df = encoder.fit(df).transform(df)
         
         # Drop original categorical columns and their indices
-        columns_to_drop = [col for col in categorical_features if col in df.columns] 
-        columns_to_drop += [f"{col}_index" for col in categorical_features if f"{col}_index" in df.columns]
-        
-        if columns_to_drop:
-            df = df.drop(*columns_to_drop)
+        columns_to_drop = categorical_features + [f"{col}_index" for col in categorical_features]
+        df = df.drop(*columns_to_drop)
         
         return df
 
@@ -387,28 +352,18 @@ class PysparkDataPipeline:
         print("=" * 50)
 
         try:
+            # Initialize with empty DataFrame
+            df = self.spark.createDataFrame([], StructType([]))
+            
             # Apply pipeline stages sequentially
-            df = None
             for stage in self.pipeline_stages:
                 print(f"Applying {stage.__class__.__name__}...")
-                if df is None:
-                    df = stage.transform(self.spark.createDataFrame([], StructType([])))
-                else:
-                    df = stage.transform(df)
-                
-                # Show progress
-                if df.count() > 0:
-                    print(f"  Rows after {stage.__class__.__name__}: {df.count():,}")
+                df = stage.transform(df)
             
-            if df.count() == 0:
-                print("No data loaded. Please check the file path.")
-                return None
-                
             original_count = df.count()
             
             # Remove duplicates
             df = df.dropDuplicates()
-            print(f"Rows after removing duplicates: {df.count():,}")
             
             # Apply standard preprocessing
             df = self._apply_standard_preprocessing(df)
@@ -435,62 +390,62 @@ class PysparkDataPipeline:
     def save_processed_data(self, path):
         """Save the processed data"""
         if self.processed_data is not None:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
             self.processed_data.write.mode("overwrite").option("header", "true").csv(path)
             print(f"Processed data saved to {path}")
 
-    def __del__(self):
-        """Clean up Spark session"""
-        if hasattr(self, 'spark'):
-            self.spark.stop()
+    def load_and_transform_new_data(self, new_data_path):
+        """Load and transform new data using the same transformations"""
+        # For PySpark, we'll recreate the pipeline for new data
+        new_pipeline = PysparkDataPipeline(new_data_path)
+        return new_pipeline.fit_transform()
 
-# Example usage with proper error handling
-if __name__ == "__main__":
-    try:
-        # Initialize the PySpark pipeline
-        pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
+# Example usage
+if __name__ == "__main__":  # Fixed this line - added double underscores
+    # Initialize Spark session
+    spark = SparkSession.builder \
+        .appName("SingaporeLoanDataPipeline") \
+        .config("spark.sql.adaptive.enabled", "true") \
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+        .getOrCreate()
 
-        # Run the complete pipeline
-        processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
+    # Initialize the PySpark pipeline
+    pyspark_pipeline = PysparkDataPipeline('singapore_loan_data.csv')
 
-        if processed_data is not None:
-            # Display results
-            print("\nPipeline Summary:")
-            print(f"Processed data count: {processed_data.count()}")
-            print(f"Processed data columns: {len(processed_data.columns)}")
+    # Run the complete pipeline
+    processed_data = pyspark_pipeline.fit_transform(save_path='processed_data_pyspark')
 
-            print("\nSample of processed data:")
-            processed_data.show(5)
+    if processed_data is not None:
+        # Display results
+        print("\nPipeline Summary:")
+        print(f"Processed data count: {processed_data.count()}")
+        print(f"Processed data columns: {len(processed_data.columns)}")
 
-            print("\nData types after processing:")
-            processed_data.printSchema()
+        print("\nSample of processed data:")
+        processed_data.show(5)
 
-            # Show the new columns created by the data cleaning processes
-            new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
-                           'Email_Domain_Legitimate', 'Email_Disposable']
+        print("\nData types after processing:")
+        processed_data.printSchema()
 
-            print("\nNew columns created by data cleaning:")
-            for col in new_columns:
-                if col in processed_data.columns:
-                    non_null_count = processed_data.filter(col(col).isNotNull()).count()
-                    print(f"{col}: {non_null_count} non-null values")
+        # Show the new columns created by the data cleaning processes
+        new_columns = ['City', 'Pincode', 'Email_Valid_Format', 'Email_Domain',
+                       'Email_Domain_Legitimate', 'Email_Disposable']
 
-            # Show phone number validation results
-            phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-            for col in phone_columns:
-                valid_col = f'{col}_Valid'
-                if valid_col in processed_data.columns:
-                    valid_count = processed_data.filter(col(valid_col) == True).count()
-                    total_count = processed_data.filter(col(valid_col).isNotNull()).count()
-                    print(f"{valid_col}: {valid_count}/{total_count} valid numbers")
-        else:
-            print("Pipeline failed to process data.")
+        print("\nNew columns created by data cleaning:")
+        for col in new_columns:
+            if col in processed_data.columns:
+                non_null_count = processed_data.filter(col(col).isNotNull()).count()
+                print(f"{col}: {non_null_count} non-null values")
 
-    except Exception as e:
-        print(f"Failed to run pipeline: {e}")
-        print("\nTroubleshooting steps:")
-        print("1. Make sure Java is installed (Java 8 or 11)")
-        print("2. Set JAVA_HOME environment variable")
-        print("3. Check if the data file exists")
-        print("4. Try installing Java: https://www.oracle.com/java/technologies/javase-jdk11-downloads.html")
+        # Show phone number validation results
+        phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
+        for col in phone_columns:
+            valid_col = f'{col}_Valid'
+            if valid_col in processed_data.columns:
+                valid_count = processed_data.filter(col(valid_col) == True).count()
+                total_count = processed_data.filter(col(valid_col).isNotNull()).count()
+                print(f"{valid_col}: {valid_count}/{total_count} valid numbers")
+    else:
+        print("Pipeline failed to process data.")
+
+    # Stop Spark session
+    spark.stop()
