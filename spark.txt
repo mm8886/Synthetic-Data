@@ -1,264 +1,190 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf, split, lit, monotonically_increasing_id
+from pyspark.sql.types import *
+import numpy as np
+import pandas as pd
+from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml.linalg import Vectors
+from xgboost.spark import SparkXGBRanker
+from sklearn.metrics import ndcg_score
+import joblib
+import warnings
+warnings.filterwarnings('ignore')
 
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import (
-    col, regexp_extract, lower, when, lit, udf, isnan, count, split, trim, length, substring, expr, array, mean as _mean
-)
-from pyspark.sql.types import BooleanType, StringType, IntegerType, DoubleType, StructType, StructField
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-import re
-from pyspark.ml.feature import VectorAssembler, StringIndexer, Imputer, OneHotEncoder
-from pyspark.ml.feature import StandardScaler as SS
+# ==============================================================
+# Initialize Spark
+# ==============================================================
+spark = SparkSession.builder \
+    .appName("XGBRanker_PySpark_Equivalent") \
+    .getOrCreate()
 
-# Custom UDFs and transformers for PySpark
+spark.sparkContext.setLogLevel("WARN")
 
-def extract_city_udf(address):
-    if address is None:
-        return None
-    singapore_regions = [
-        'Tengah', 'Loyang', 'Pasir Ris', 'Tampines', 'Clementi', 'Jurong',
-        'Queenstown', 'Woodlands', 'Serangoon', 'Bedok', 'Ang Mo Kio',
-        'Toa Payoh', 'Bishan', 'Bukit Merah', 'Bukit Timah', 'Geylang',
-        'Kallang', 'Marine Parade', 'Novena', 'Potong Pasir', 'Punggol',
-        'Sembawang', 'Sengkang', 'Hougang', 'Yishun', 'Lim Chu Kang',
-        'Mandai', 'Sungei Kadut', 'Central Area', 'Downtown Core',
-        'Newton', 'Orchard', 'River Valley', 'Rochor', 'Singapore River',
-        'Southern Islands', 'Straits View', 'Outram', 'Museum',
-        'Dhoby Ghaut', 'Marina South', 'Marina East', 'Marina Centre'
-    ]
-    address_lower = address.lower()
-    for region in singapore_regions:
-        if region.lower() in address_lower:
-            return region
-    match = re.search(r'(\w+)\s+Singapore', address, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    return 'Unknown'
+# ==============================================================
+# Data Preparation Class
+# ==============================================================
+class ChannelRankingDataPreparatorSpark:
+    """Prepare ranking data in PySpark equivalent to pandas logic."""
 
-def extract_pincode_udf(address):
-    if address is None:
-        return None
-    match = re.search(r'\b(\d{6})\b', address)
-    if match:
-        return match.group(1)
-    return None
+    def __init__(self):
+        self.channels = ['SMS', 'Email', 'Call', 'WhatsApp', 'IVR', 'Field_Agent']
+        self.feature_cols = None
+        self.label_encoders = {}
 
-def process_phone_number_udf(phone):
-    if phone is None:
-        return None
-    cleaned = re.sub(r'[\s\-\(\)]', '', str(phone))
-    for country_code in ['+65', '65', '0065']:
-        if cleaned.startswith(country_code):
-            cleaned = cleaned[len(country_code):]
-            break
-    return cleaned
+    def prepare_ranking_data(self, df_spark):
+        print("Preparing ranking format...")
 
-def validate_singapore_number_udf(phone):
-    if phone is None:
-        return False
-    if re.match(r'^[3689]\d{7}$', phone):
-        return True
-    return False
+        # Collect schema information
+        all_cols = df_spark.columns
+        exclude_cols = ['Customer_id', 'Channel_Preference_Order', 'Preference_Label', 'Top_Channel']
+        exclude_cols.extend([c for c in all_cols if 'Prefers_' in c])
+        self.feature_cols = [c for c in all_cols if c not in exclude_cols]
 
-def validate_email_format_udf(email):
-    if email is None:
-        return False
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return bool(re.match(email_pattern, email))
+        print(f"Selected {len(self.feature_cols)} feature columns.")
 
-def extract_domain_udf(email):
-    if email is None or '@' not in email:
-        return None
-    return email.split('@')[1].lower()
+        # Encode categorical columns using StringIndexer
+        categorical_cols = [f for (f, t) in df_spark.dtypes if t == 'string' and f in self.feature_cols]
+        for col_name in categorical_cols:
+            indexer = StringIndexer(inputCol=col_name, outputCol=f"{col_name}_idx", handleInvalid='keep')
+            df_spark = indexer.fit(df_spark).transform(df_spark)
+        # Replace feature columns with encoded
+        self.feature_cols = [f"{c}_idx" if c in categorical_cols else c for c in self.feature_cols]
 
-def is_legitimate_domain_udf(domain):
-    if domain is None:
-        return False
-    legitimate_domains = [
-        'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
-        'icloud.com', 'protonmail.com', 'zoho.com', 'aol.com', 'mail.com',
-        'gmail.com.sg', 'yahoo.com.sg', 'hotmail.com.sg', 'singnet.com.sg',
-        'starhub.net.sg', 'pacific.net.sg'
-    ]
-    return domain in legitimate_domains
+        print("Encoding completed for categorical columns.")
 
-def is_disposable_domain_udf(domain):
-    if domain is None:
-        return False
-    disposable_domains = [
-        'tempmail.com', '10minutemail.com', 'guerrillamail.com',
-        'mailinator.com', 'yopmail.com', 'trashmail.com',
-        'disposableemail.com', 'fakeinbox.com', 'temp-mail.org'
-    ]
-    return domain in disposable_domains
+        # Convert to Pandas for group-wise ranking (because ranking logic is complex)
+        pdf = df_spark.toPandas()
+        print(f"Processing {len(pdf)} customers...")
 
-def income_band_encoder_udf(val):
-    mapping = {
-        '50,000 or Below': 0,
-        '50,000 to 100,000': 1,
-        '100,000 to 200,000': 2,
-        '200,000 to 300,000': 3,
-        '300,000 to 500,000': 4,
-        '500,000 or Above': 5
-    }
-    return mapping.get(val, None)
+        ranking_data = []
+        group_sizes = []
 
-def boolean_converter_udf(val):
-    if val is None:
-        return None
-    val = str(val).lower()
-    if val in ['true', '1', 'yes']:
-        return True
-    if val in ['false', '0', 'no']:
-        return False
-    return None
+        for idx, row in pdf.iterrows():
+            customer_id = row['Customer_id']
+            pref_order = str(row['Channel_Preference_Order']).split(',')
+            customer_features = row[self.feature_cols].values.astype(float)
 
-# Register UDFs
-from pyspark.sql.functions import udf
-extract_city = udf(extract_city_udf, StringType())
-extract_pincode = udf(extract_pincode_udf, StringType())
-process_phone_number = udf(process_phone_number_udf, StringType())
-validate_singapore_number = udf(validate_singapore_number_udf, BooleanType())
-validate_email_format = udf(validate_email_format_udf, BooleanType())
-extract_domain = udf(extract_domain_udf, StringType())
-is_legitimate_domain = udf(is_legitimate_domain_udf, BooleanType())
-is_disposable_domain = udf(is_disposable_domain_udf, BooleanType())
-income_band_encoder = udf(income_band_encoder_udf, IntegerType())
-boolean_converter = udf(boolean_converter_udf, BooleanType())
+            for rank, channel in enumerate(pref_order):
+                if channel in self.channels:
+                    channel_features = np.zeros(len(self.channels))
+                    ch_idx = self.channels.index(channel)
+                    channel_features[ch_idx] = 1
+                    combined_features = np.concatenate([customer_features, channel_features])
+                    relevance = len(self.channels) - rank
 
-# Main PySpark pipeline function
-def run_pyspark_data_pipeline(input_path, save_path=None):
-    df = spark.read.csv(input_path, header=True, inferSchema=True)
+                    ranking_data.append({
+                        'customer_id': customer_id,
+                        'channel': channel,
+                        'features': Vectors.dense(combined_features),
+                        'relevance': float(relevance),
+                        'group_id': idx
+                    })
+            group_sizes.append(len(self.channels))
 
-    # Address processing
-    if 'Address' in df.columns:
-        df = df.withColumn('City', extract_city(col('Address')))
-        df = df.withColumn('Pincode', extract_pincode(col('Address')))
-        df = df.drop('Address')
+        df_rank = spark.createDataFrame(ranking_data)
+        print(f"\nRanking dataset created:")
+        print(f"Total samples: {df_rank.count():,}")
+        print(f"Total customers (groups): {len(group_sizes):,}")
+        print(f"Features per sample: {len(ranking_data[0]['features'])}")
+        print(f"Group sizes: {group_sizes[0]} (should equal {len(self.channels)})")
 
-    # Phone number processing
-    phone_columns = ['Primary_Phone_Number', 'Secondary_Mobile_Number', 'Landline_Phone_Number']
-    for colname in phone_columns:
-        if colname in df.columns:
-            df = df.withColumn(colname, process_phone_number(col(colname)))
-            df = df.withColumn(f"{colname}_Valid", validate_singapore_number(col(colname)))
+        return df_rank, np.array(group_sizes)
 
-    # Email validation
-    if 'Email_ID' in df.columns:
-        df = df.withColumn('Email_Valid_Format', validate_email_format(col('Email_ID')))
-        df = df.withColumn('Email_Domain', extract_domain(col('Email_ID')))
-        df = df.withColumn('Email_Domain_Legitimate', is_legitimate_domain(col('Email_Domain')))
-        df = df.withColumn('Email_Disposable', is_disposable_domain(col('Email_Domain')))
+# ==============================================================
+# Train XGBRanker with PySpark
+# ==============================================================
+def train_xgb_ranker_spark(df_rank, groups, random_state=42):
+    print("\n" + "="*60)
+    print("TRAINING XGBRANKER MODEL (PySpark Equivalent)")
+    print("="*60)
 
-    # Boolean conversion
-    bool_columns = ['Partial_Payment_Indicator', 'Repayment_Irregularity_Flags',
-                   'Mobile_Number_Active_Status', 'Email_Activity', 'Do_Not_Call_Registry_Data']
-    for colname in bool_columns:
-        if colname in df.columns:
-            df = df.withColumn(colname, boolean_converter(col(colname)))
+    # Split data manually like original
+    n_train_groups = int(len(groups) * 0.8)
+    train_groups = list(range(n_train_groups))
+    test_groups = list(range(n_train_groups, len(groups)))
 
-    # Income band encoding
-    if 'Income_Band_SGD' in df.columns:
-        df = df.withColumn('Income_Band_SGD', income_band_encoder(col('Income_Band_SGD')))
+    df_train = df_rank.filter(col("group_id") < n_train_groups)
+    df_test = df_rank.filter(col("group_id") >= n_train_groups)
 
-    # Date feature extraction
-    date_columns = ['Installment_Due_Date', 'Last_Payment_Date']
-    for colname in date_columns:
-        if colname in df.columns:
-            df = df.withColumn(colname, col(colname).cast('timestamp'))
-            df = df.withColumn(f"{colname}_month", expr(f"month({colname})"))
-            df = df.withColumn(f"{colname}_dayofweek", expr(f"dayofweek({colname})"))
-            df = df.withColumn(f"{colname}_year", expr(f"year({colname})"))
-            df = df.drop(colname)
+    print(f"Train set: {df_train.count():,} samples, Test set: {df_test.count():,} samples")
 
-    # Digital engagement score
-    engagement_metrics = ['App_Login_Frequency', 'UPI_Transactions', 'Online_Banking_Activity']
-    if all(metric in df.columns for metric in engagement_metrics):
-        df = df.withColumn(
-            'Digital_Engagement_Score',
-            (col('App_Login_Frequency') +
-             col('UPI_Transactions') +
-             col('Online_Banking_Activity')) / lit(3)
-        )
+    # Initialize Spark XGBRanker
+    ranker = SparkXGBRanker(
+        objective='rank:ndcg',
+        eval_metric='ndcg@32',
+        num_round=100,
+        max_depth=6,
+        eta=0.1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=random_state,
+        num_workers=2
+    )
 
-    # Remove duplicates
-    df = df.dropDuplicates()
+    # Fit model
+    model = ranker.fit(df_train, group_col="group_id", label_col="relevance", features_col="features")
+    print("\nModel training completed successfully!")
 
-    numeric_cols = [
-        'Age', 'Loan_Amount_SGD', 'Outstanding_Balance_SGD', 'Day_Past_Due',
-        'Tenure', 'Interest_Rate', 'Current_EMI_SGD', 'Number_of_Past_Payments',
-        'Amount_Paid_Each_Month_SGD', 'Bounce_History', 'Contact_History_Call_Attempts',
-        'Contact_History_SMS', 'Contact_History_WhatsApp', 'Contact_History_EmailLogs',
-        'No_of_Attempts', 'Average_Handling_Time', 'Credit_Score', 'Recent_Inquiries',
-        'Loan_Exposure_Across_Banks', 'Recent_Score_Change', 'Unemployeement_rate_region',
-        'Inflation_Rate', 'Interest_Rate_Trend', 'Economic_Stress_Index',
-        'Income_Band_SGD', 'Digital_Engagement_Score'
-    ]
-    categorical_cols = [
-        'Product_Type', 'Payment_Frequency', 'Settlement_History',
-        'Channel_used', 'Response_Outcome', 'Urban_Rural_Tag',
-        'Language_Preference', 'Smartphone_Penetration', 'Preferred_Channel',
-        'Call_SMS_Activity_Patterns', 'WhatsApp_OTT_usage_Indicator',
-        'Regional_Time_Restrictions', 'Communication_Complaince_Limits',
-        'Gender', 'Occupation', 'Employeement_Type'
-    ]
+    # Predictions
+    predictions = model.transform(df_test).select("group_id", "relevance", "prediction").toPandas()
 
-    numeric_features = [c for c in numeric_cols if c in df.columns]
-    categorical_features = [c for c in categorical_cols if c in df.columns]
+    # Evaluate NDCG
+    y_true, y_pred = [], []
+    for gid in sorted(predictions['group_id'].unique()):
+        grp = predictions[predictions['group_id'] == gid]
+        y_true.append(grp['relevance'].values)
+        y_pred.append(grp['prediction'].values)
 
-    # Handle numeric columns
-    numeric_imputer = SimpleImputer(strategy='median')
-    numeric_scaler = StandardScaler()
+    ndcg = ndcg_score(y_true, y_pred)
+    print(f"NDCG Score: {ndcg:.4f}")
 
-    if numeric_features:
-        # Step 1: Impute missing values with median
-        imputer = Imputer(strategy="median", inputCols=numeric_features, outputCols=[f"{c}_imputed" for c in numeric_features])
-        df = imputer.fit(df).transform(df)
+    return model, ndcg
 
-        # Step 2: Assemble the imputed numeric columns into a single vector for scaling
-        assembler = VectorAssembler(inputCols=[f"{c}_imputed" for c in numeric_features], outputCol="numeric_vector")
-        df = assembler.transform(df)
+# ==============================================================
+# Demonstrate Predictions
+# ==============================================================
+def demonstrate_predictions_spark(model, df_rank, channels, n_customers=5):
+    print("\n" + "="*60)
+    print("EXAMPLE PREDICTIONS (PySpark)")
+    print("="*60)
 
-        # Step 3: Standard scaling
-        scaler = SS(inputCol="numeric_vector", outputCol="numeric_scaled", withMean=True, withStd=True)
-        scaler_model = scaler.fit(df)
-        df = scaler_model.transform(df)
+    samples = df_rank.filter(col("group_id") < n_customers).toPandas()
 
-        # Step 4: Replace original columns with scaled values
-        from pyspark.sql.functions import udf
-        from pyspark.sql.types import ArrayType, DoubleType
+    for i in range(n_customers):
+        cust = samples[samples['group_id'] == i]
+        preds = model.transform(spark.createDataFrame(cust)).toPandas()
+        preds = preds[['channel', 'prediction']].sort_values(by='prediction', ascending=False)
 
-        # UDF to split scaled vector into separate columns
-        def vector_to_array(v):
-            return v.toArray().tolist()
+        print(f"\nCustomer {i+1} Channel Preferences:")
+        for rank, row in enumerate(preds.itertuples(), 1):
+            print(f"  {rank}. {row.channel}: {row.prediction:.4f}")
 
-        vector_to_array_udf = udf(vector_to_array, ArrayType(DoubleType()))
-        df = df.withColumn("numeric_scaled_array", vector_to_array_udf(col("numeric_scaled")))
+# ==============================================================
+# MAIN EXECUTION
+# ==============================================================
+if __name__ == "__main__":
+    print("="*60)
+    print("PREPARING CHANNEL RANKING DATA FOR XGBRANKER (PySpark)")
+    print("="*60)
 
-        for i, c in enumerate(numeric_features):
-            df = df.withColumn(c, col("numeric_scaled_array")[i])
+    try:
+        df_spark = spark.read.csv("features_with_labels.csv", header=True, inferSchema=True)
+        print(f"Loaded data shape: {df_spark.count()} rows, {len(df_spark.columns)} columns")
+    except Exception as e:
+        print("Error loading data:", e)
+        exit(1)
 
-        # Drop temporary columns
-        df = df.drop(*[f"{c}_imputed" for c in numeric_features], "numeric_vector", "numeric_scaled", "numeric_scaled_array")
+    preparator = ChannelRankingDataPreparatorSpark()
+    df_rank, groups = preparator.prepare_ranking_data(df_spark)
 
-    # Handle categorical columns
-    if categorical_features:
-        for colname in categorical_features:
-            unique_values = [row[colname] for row in df.select(colname).distinct().collect() if row[colname] is not None]
-            for val in unique_values:
-                safe_val = re.sub(r'\W+', '_', str(val))
-                new_col = f"{colname}_{safe_val}"
-                df = df.withColumn(new_col, (col(colname) == lit(val)).cast("int"))
-        df = df.drop(*categorical_features)
+    model, ndcg_val = train_xgb_ranker_spark(df_rank, groups)
 
-    if save_path:
-        df.write.mode('overwrite').option('header', True).parquet(save_path)
+    model.write().overwrite().save("xgb_channel_ranker_spark.model")
+    joblib.dump(preparator, "channel_ranking_data_preparator_spark.pkl")
 
-    return df
+    demonstrate_predictions_spark(model, df_rank, preparator.channels)
 
-# Example usage
-dataset_df = run_pyspark_data_pipeline('/Volumes/dataset/dataset/singapore_loan_data/singapore_loan_data.csv', save_path='/Volumes/dataset/dataset/processed_data/processed_data_spark_parquet')
-
-processed_df = spark.read.parquet('/Volumes/dataset/dataset/processed_data/processed_data_spark_parquet', header=True, inferSchema=True)
-
-processed_df.show()
+    print("\n" + "="*60)
+    print("MODEL TRAINING COMPLETED SUCCESSFULLY! (PySpark Version)")
+    print("="*60)
+    print(f"Final NDCG Score: {ndcg_val:.4f}")
