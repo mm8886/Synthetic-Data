@@ -1,190 +1,277 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, udf, split, lit, monotonically_increasing_id
+from pyspark.sql.functions import *
 from pyspark.sql.types import *
+from pyspark.ml.feature import StringIndexer, VectorAssembler, OneHotEncoder
+from pyspark.ml import Pipeline
+from pyspark.ml.linalg import Vectors, VectorUDT
 import numpy as np
-import pandas as pd
-from pyspark.ml.feature import StringIndexer, VectorAssembler
-from pyspark.ml.linalg import Vectors
-from xgboost.spark import SparkXGBRanker
 from sklearn.metrics import ndcg_score
+import xgboost as xgb
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
-# ==============================================================
-# Initialize Spark
-# ==============================================================
-spark = SparkSession.builder \
-    .appName("XGBRanker_PySpark_Equivalent") \
-    .getOrCreate()
-
-spark.sparkContext.setLogLevel("WARN")
-
-# ==============================================================
-# Data Preparation Class
-# ==============================================================
 class ChannelRankingDataPreparatorSpark:
-    """Prepare ranking data in PySpark equivalent to pandas logic."""
+    """Prepare data for XGBRanker training using PySpark"""
 
     def __init__(self):
         self.channels = ['SMS', 'Email', 'Call', 'WhatsApp', 'IVR', 'Field_Agent']
         self.feature_cols = None
-        self.label_encoders = {}
+        self.string_indexers = {}
+        self.encoder_models = {}
 
-    def prepare_ranking_data(self, df_spark):
-        print("Preparing ranking format...")
-
-        # Collect schema information
-        all_cols = df_spark.columns
+    def prepare_ranking_data(self, df):
+        """Convert preference data to ranking format using PySpark"""
+        print("Preparing ranking format with PySpark...")
+        
+        # Get feature columns (exclude label columns and Customer_id)
         exclude_cols = ['Customer_id', 'Channel_Preference_Order', 'Preference_Label', 'Top_Channel']
-        exclude_cols.extend([c for c in all_cols if 'Prefers_' in c])
-        self.feature_cols = [c for c in all_cols if c not in exclude_cols]
-
-        print(f"Selected {len(self.feature_cols)} feature columns.")
-
-        # Encode categorical columns using StringIndexer
-        categorical_cols = [f for (f, t) in df_spark.dtypes if t == 'string' and f in self.feature_cols]
-        for col_name in categorical_cols:
-            indexer = StringIndexer(inputCol=col_name, outputCol=f"{col_name}_idx", handleInvalid='keep')
-            df_spark = indexer.fit(df_spark).transform(df_spark)
-        # Replace feature columns with encoded
-        self.feature_cols = [f"{c}_idx" if c in categorical_cols else c for c in self.feature_cols]
-
-        print("Encoding completed for categorical columns.")
-
-        # Convert to Pandas for group-wise ranking (because ranking logic is complex)
-        pdf = df_spark.toPandas()
-        print(f"Processing {len(pdf)} customers...")
-
-        ranking_data = []
-        group_sizes = []
-
-        for idx, row in pdf.iterrows():
+        exclude_cols.extend([col for col in df.columns if 'Prefers_' in col])
+        
+        self.feature_cols = [col for col in df.columns if col not in exclude_cols]
+        
+        # Identify categorical columns
+        categorical_cols = []
+        for col in self.feature_cols:
+            dtype = dict(df.dtypes)[col]
+            if dtype in ['string', 'varchar']:
+                categorical_cols.append(col)
+        
+        # Prepare data for processing
+        spark_df = df.select(*self.feature_cols, 'Customer_id', 'Channel_Preference_Order')
+        
+        # Process each customer to create ranking dataset
+        print(f"Processing {spark_df.count()} customers...")
+        
+        def create_ranking_samples(row):
+            """Create ranking samples for each customer"""
+            customer_features = []
+            for col in self.feature_cols:
+                val = row[col]
+                # Convert to float, handling different data types
+                if val is None:
+                    customer_features.append(0.0)
+                elif isinstance(val, (int, float)):
+                    customer_features.append(float(val))
+                else:
+                    # For string categoricals, we'll index them later
+                    customer_features.append(float(hash(str(val)) % 10000))
+            
             customer_id = row['Customer_id']
-            pref_order = str(row['Channel_Preference_Order']).split(',')
-            customer_features = row[self.feature_cols].values.astype(float)
-
-            for rank, channel in enumerate(pref_order):
+            preference_order = row['Channel_Preference_Order'].split(',')
+            
+            samples = []
+            for rank, channel in enumerate(preference_order):
                 if channel in self.channels:
-                    channel_features = np.zeros(len(self.channels))
-                    ch_idx = self.channels.index(channel)
-                    channel_features[ch_idx] = 1
-                    combined_features = np.concatenate([customer_features, channel_features])
+                    # Channel one-hot encoding
+                    channel_features = [0.0] * len(self.channels)
+                    channel_idx = self.channels.index(channel)
+                    channel_features[channel_idx] = 1.0
+                    
+                    # Combine customer and channel features
+                    combined_features = customer_features + channel_features
+                    
+                    # Relevance score (higher rank = higher relevance)
                     relevance = len(self.channels) - rank
+                    
+                    samples.append((
+                        customer_id,
+                        channel,
+                        Vectors.dense(combined_features),
+                        float(relevance),
+                        int(hash(customer_id) % 1000000)  # group_id
+                    ))
+            
+            return samples
 
-                    ranking_data.append({
-                        'customer_id': customer_id,
-                        'channel': channel,
-                        'features': Vectors.dense(combined_features),
-                        'relevance': float(relevance),
-                        'group_id': idx
-                    })
-            group_sizes.append(len(self.channels))
-
-        df_rank = spark.createDataFrame(ranking_data)
+        # Create ranking samples
+        sample_rdd = spark_df.rdd.flatMap(create_ranking_samples)
+        
+        # Define schema for the result DataFrame
+        schema = StructType([
+            StructField("customer_id", StringType(), True),
+            StructField("channel", StringType(), True),
+            StructField("features", VectorUDT(), True),
+            StructField("relevance", DoubleType(), True),
+            StructField("group_id", IntegerType(), True)
+        ])
+        
+        ranking_df = spark_df.sql_ctx.createDataFrame(sample_rdd, schema)
+        
+        # Cache the DataFrame for faster processing
+        ranking_df.cache()
+        
+        # Convert to numpy arrays for XGBoost
+        print("Converting to numpy arrays...")
+        
+        # Collect data and convert to numpy arrays
+        collected_data = ranking_df.collect()
+        
+        X_ranking = np.array([row['features'].toArray() for row in collected_data])
+        y_ranking = np.array([row['relevance'] for row in collected_data])
+        
+        # Create groups array
+        group_df = ranking_df.groupBy("group_id").count().orderBy("group_id")
+        groups = np.array([row['count'] for row in group_df.collect()])
+        
         print(f"\nRanking dataset created:")
-        print(f"Total samples: {df_rank.count():,}")
-        print(f"Total customers (groups): {len(group_sizes):,}")
-        print(f"Features per sample: {len(ranking_data[0]['features'])}")
-        print(f"Group sizes: {group_sizes[0]} (should equal {len(self.channels)})")
+        print(f"Total samples: {len(X_ranking):,}")
+        print(f"Total customers (groups): {len(groups):,}")
+        print(f"Features per sample: {X_ranking.shape[1]}")
+        print(f"Group sizes (samples per customer): {groups[0]} (all should be {len(self.channels)})")
+        
+        return X_ranking, y_ranking, groups, ranking_df
 
-        return df_rank, np.array(group_sizes)
-
-# ==============================================================
-# Train XGBRanker with PySpark
-# ==============================================================
-def train_xgb_ranker_spark(df_rank, groups, random_state=42):
+def train_xgb_ranker(X, y, groups, test_size=0.2, random_state=42):
+    """Train XGBRanker model (same as original function)"""
     print("\n" + "="*60)
-    print("TRAINING XGBRANKER MODEL (PySpark Equivalent)")
+    print("TRAINING XGBRANKER MODEL")
     print("="*60)
 
-    # Split data manually like original
-    n_train_groups = int(len(groups) * 0.8)
-    train_groups = list(range(n_train_groups))
-    test_groups = list(range(n_train_groups, len(groups)))
+    # Calculate split points for groups
+    n_train_groups = int(len(groups) * (1 - test_size))
+    train_samples = sum(groups[:n_train_groups])
 
-    df_train = df_rank.filter(col("group_id") < n_train_groups)
-    df_test = df_rank.filter(col("group_id") >= n_train_groups)
+    # Split data
+    X_train = X[:train_samples]
+    y_train = y[:train_samples]
+    groups_train = groups[:n_train_groups]
 
-    print(f"Train set: {df_train.count():,} samples, Test set: {df_test.count():,} samples")
+    X_test = X[train_samples:]
+    y_test = y[train_samples:]
+    groups_test = groups[n_train_groups:]
 
-    # Initialize Spark XGBRanker
-    ranker = SparkXGBRanker(
+    print(f"Feature matrix shape: {X_train.shape}")
+    print(f"Label vector shape: {y_train.shape}")
+    print(f"Number of groups: {len(groups_train):,}")
+    print(f"\nTrain set: {len(X_train):,} samples from {len(groups_train):,} customers")
+    print(f"Test set: {len(X_test):,} samples from {len(groups_test):,} customers")
+
+    # Initialize XGBRanker
+    print("\nInitializing XGBRanker...")
+    model = xgb.XGBRanker(
         objective='rank:ndcg',
-        eval_metric='ndcg@32',
-        num_round=100,
+        learning_rate=0.1,
         max_depth=6,
-        eta=0.1,
+        n_estimators=100,
         subsample=0.8,
         colsample_bytree=0.8,
         random_state=random_state,
-        num_workers=2
+        eval_metric='ndcg@32'
     )
 
-    # Fit model
-    model = ranker.fit(df_train, group_col="group_id", label_col="relevance", features_col="features")
+    # Train model
+    print("Training XGBRanker...")
+    model.fit(
+        X_train, y_train,
+        group=groups_train,
+        eval_set=[(X_test, y_test)],
+        eval_group=[groups_test],
+        verbose=True
+    )
+
     print("\nModel training completed successfully!")
 
-    # Predictions
-    predictions = model.transform(df_test).select("group_id", "relevance", "prediction").toPandas()
+    # Make predictions
+    print("\nMaking predictions...")
+    y_pred = model.predict(X_test)
 
-    # Evaluate NDCG
-    y_true, y_pred = [], []
-    for gid in sorted(predictions['group_id'].unique()):
-        grp = predictions[predictions['group_id'] == gid]
-        y_true.append(grp['relevance'].values)
-        y_pred.append(grp['prediction'].values)
+    # Calculate NDCG
+    print("Calculating NDCG score...")
+    # Reshape predictions for NDCG calculation
+    y_test_reshaped = []
+    y_pred_reshaped = []
 
-    ndcg = ndcg_score(y_true, y_pred)
+    start_idx = 0
+    for group_size in groups_test:
+        end_idx = start_idx + group_size
+        y_test_reshaped.append(y_test[start_idx:end_idx])
+        y_pred_reshaped.append(y_pred[start_idx:end_idx])
+        start_idx = end_idx
+
+    ndcg = ndcg_score(y_test_reshaped, y_pred_reshaped)
     print(f"NDCG Score: {ndcg:.4f}")
 
     return model, ndcg
 
-# ==============================================================
-# Demonstrate Predictions
-# ==============================================================
-def demonstrate_predictions_spark(model, df_rank, channels, n_customers=5):
+def demonstrate_predictions(model, X, channels, n_customers=5):
+    """Show example predictions (same as original function)"""
     print("\n" + "="*60)
-    print("EXAMPLE PREDICTIONS (PySpark)")
+    print("EXAMPLE PREDICTIONS")
     print("="*60)
 
-    samples = df_rank.filter(col("group_id") < n_customers).toPandas()
+    samples_per_customer = len(channels)
 
     for i in range(n_customers):
-        cust = samples[samples['group_id'] == i]
-        preds = model.transform(spark.createDataFrame(cust)).toPandas()
-        preds = preds[['channel', 'prediction']].sort_values(by='prediction', ascending=False)
+        start_idx = i * samples_per_customer
+        end_idx = start_idx + samples_per_customer
+
+        customer_samples = X[start_idx:end_idx]
+        predictions = model.predict(customer_samples)
+
+        # Sort channels by prediction score
+        channel_scores = list(zip(channels, predictions))
+        channel_scores.sort(key=lambda x: x[1], reverse=True)
 
         print(f"\nCustomer {i+1} Channel Preferences:")
-        for rank, row in enumerate(preds.itertuples(), 1):
-            print(f"  {rank}. {row.channel}: {row.prediction:.4f}")
+        for rank, (channel, score) in enumerate(channel_scores, 1):
+            print(f"  {rank}. {channel}: {score:.4f}")
 
-# ==============================================================
-# MAIN EXECUTION
-# ==============================================================
+# Main execution
 if __name__ == "__main__":
     print("="*60)
-    print("PREPARING CHANNEL RANKING DATA FOR XGBRANKER (PySpark)")
+    print("PREPARING CHANNEL RANKING DATA FOR XGBRANKER WITH PYSPARK")
     print("="*60)
 
+    # Initialize Spark session
+    spark = SparkSession.builder \
+        .appName("ChannelRanking") \
+        .config("spark.sql.adaptive.enabled", "true") \
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+        .getOrCreate()
+
+    # Load data
+    print("Loading features_with_labels.csv...")
     try:
-        df_spark = spark.read.csv("features_with_labels.csv", header=True, inferSchema=True)
-        print(f"Loaded data shape: {df_spark.count()} rows, {len(df_spark.columns)} columns")
+        df = spark.read.option("header", "true").option("inferSchema", "true").csv('features_with_labels.csv')
+        print(f"Loaded data shape: ({df.count()}, {len(df.columns)})")
     except Exception as e:
-        print("Error loading data:", e)
+        print(f"Error loading data: {e}")
+        spark.stop()
         exit(1)
 
+    # Prepare data
     preparator = ChannelRankingDataPreparatorSpark()
-    df_rank, groups = preparator.prepare_ranking_data(df_spark)
+    X, y, groups, ranking_df = preparator.prepare_ranking_data(df)
 
-    model, ndcg_val = train_xgb_ranker_spark(df_rank, groups)
+    # Show some stats about the ranking DataFrame
+    print(f"\nRanking DataFrame stats:")
+    ranking_df.select(
+        count("customer_id").alias("total_samples"),
+        countDistinct("customer_id").alias("unique_customers"),
+        countDistinct("group_id").alias("unique_groups")
+    ).show()
 
-    model.write().overwrite().save("xgb_channel_ranker_spark.model")
-    joblib.dump(preparator, "channel_ranking_data_preparator_spark.pkl")
+    # Train model (using same function as it works with numpy arrays)
+    model, ndcg_score = train_xgb_ranker(X, y, groups)
 
-    demonstrate_predictions_spark(model, df_rank, preparator.channels)
+    # Save model and preparator
+    model_filename = 'xgb_channel_ranker.pkl'
+    joblib.dump(model, model_filename)
+    joblib.dump(preparator, 'channel_ranking_data_preparator.pkl')
+    print(f"\nModel saved as '{model_filename}'")
+    print("Preparator saved as 'channel_ranking_data_preparator.pkl'")
+
+    # Demonstrate predictions
+    demonstrate_predictions(model, X, preparator.channels)
 
     print("\n" + "="*60)
-    print("MODEL TRAINING COMPLETED SUCCESSFULLY! (PySpark Version)")
+    print("MODEL TRAINING COMPLETED SUCCESSFULLY!")
     print("="*60)
-    print(f"Final NDCG Score: {ndcg_val:.4f}")
+    print(f"Feature columns used: {X.shape[1]}")
+    print(f"Model saved as: {model_filename}")
+    print(f"Total customers processed: {len(groups):,}")
+    print(f"Final NDCG Score: {ndcg_score:.4f}")
+
+    # Stop Spark session
+    spark.stop()
